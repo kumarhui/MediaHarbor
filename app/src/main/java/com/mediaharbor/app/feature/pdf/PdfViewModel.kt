@@ -257,7 +257,11 @@ fun PdfScreen(
                             }
                         },
                         onLongClick = {
-                            selectionViewModel.startSelection(pdf)
+                            if (selectionViewModel.isSelectionMode) {
+                                selectionViewModel.selectRange(pdf, filtered)
+                            } else {
+                                selectionViewModel.startSelection(pdf)
+                            }
                         }
                     )
                 }

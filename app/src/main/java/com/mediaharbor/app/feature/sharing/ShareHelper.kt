@@ -14,6 +14,7 @@ import android.print.PrintManager
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.mediaharbor.app.domain.model.MediaItem
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -63,6 +64,35 @@ object ShareHelper {
         }
         context.startActivity(Intent.createChooser(intent, "Share Media"))
     }
+
+    fun shareMultiple(context: Context, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        if (items.size == 1) {
+            val first = items[0]
+            shareGeneral(context, first.uri, first.mimeType)
+            return
+        }
+
+        val shareableUris = ArrayList<Uri>()
+        items.forEach { item ->
+            shareableUris.add(getShareableUri(context, item.uri))
+        }
+
+        val commonMimeType = if (items.all { it.mimeType.startsWith("image/") }) {
+            "image/*"
+        } else if (items.all { it.mimeType == "application/pdf" }) {
+            "application/pdf"
+        } else {
+            "*/*"
+        }
+
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = commonMimeType
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, shareableUris)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share Selected (${items.size})"))
+    }
 }
 
 object PrintHelper {
@@ -71,7 +101,6 @@ object PrintHelper {
         val nokoPackage = "com.nokoprint"
         val shareableUri = ShareHelper.getShareableUri(context, uri)
 
-        // Check whether com.nokoprint is installed on the device
         val isNokoInstalled = try {
             context.packageManager.getPackageInfo(nokoPackage, 0)
             true
@@ -98,7 +127,6 @@ object PrintHelper {
             Toast.makeText(context, "NokoPrint not installed. Opening system print...", Toast.LENGTH_SHORT).show()
         }
 
-        // Native Android PrintManager fallback if NokoPrint is unavailable
         try {
             val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
             if (printManager == null) {

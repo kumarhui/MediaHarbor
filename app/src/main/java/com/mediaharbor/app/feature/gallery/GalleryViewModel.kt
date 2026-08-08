@@ -123,7 +123,11 @@ fun GalleryScreen(
                             }
                         },
                         onLongClick = {
-                            selectionViewModel.startSelection(item)
+                            if (selectionViewModel.isSelectionMode) {
+                                selectionViewModel.selectRange(item, filtered)
+                            } else {
+                                selectionViewModel.startSelection(item)
+                            }
                         }
                     )
                 }

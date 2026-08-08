@@ -174,10 +174,7 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
                                     selectionViewModel = selectionViewModel,
                                     totalAvailableItems = allMediaList,
                                     onShareSelected = {
-                                        val first = selectionViewModel.selectedItems.firstOrNull()
-                                        if (first != null) {
-                                            ShareHelper.shareGeneral(context, first.uri, first.mimeType)
-                                        }
+                                        ShareHelper.shareMultiple(context, selectionViewModel.selectedItems)
                                     },
                                     onDeleteSelected = {
                                         val itemsToDelete = selectionViewModel.selectedItems.toList()
