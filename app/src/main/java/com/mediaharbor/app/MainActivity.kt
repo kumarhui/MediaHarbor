@@ -110,105 +110,108 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
         onDoubleBackExit()
     }
 
-    Scaffold(
-        topBar = {
-            if (activeViewerMedia == null && activeTagCollection == null) {
-                if (selectionViewModel.isSelectionMode) {
-                    SelectionTopBar(
-                        selectionViewModel = selectionViewModel,
-                        totalAvailableItems = allMediaList,
-                        onShareSelected = {
-                            val first = selectionViewModel.selectedItems.firstOrNull()
-                            if (first != null) {
-                                ShareHelper.shareGeneral(context, first.uri, first.mimeType)
-                            }
-                        },
-                        onDeleteSelected = {
-                            Toast.makeText(context, "Deleted ${selectionViewModel.selectedItems.size} items", Toast.LENGTH_SHORT).show()
-                            selectionViewModel.clearSelection()
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (activeTagCollection != null) {
+            // TagCollectionScreen manages its own Scaffold, TopAppBar, and Insets directly without double padding
+            TagCollectionScreen(
+                tag = activeTagCollection!!,
+                allMediaItems = allMediaList,
+                onBack = { activeTagCollection = null },
+                onMediaClick = { activeViewerMedia = it }
+            )
+        } else {
+            Scaffold(
+                topBar = {
+                    if (activeViewerMedia == null) {
+                        if (selectionViewModel.isSelectionMode) {
+                            SelectionTopBar(
+                                selectionViewModel = selectionViewModel,
+                                totalAvailableItems = allMediaList,
+                                onShareSelected = {
+                                    val first = selectionViewModel.selectedItems.firstOrNull()
+                                    if (first != null) {
+                                        ShareHelper.shareGeneral(context, first.uri, first.mimeType)
+                                    }
+                                },
+                                onDeleteSelected = {
+                                    Toast.makeText(context, "Deleted ${selectionViewModel.selectedItems.size} items", Toast.LENGTH_SHORT).show()
+                                    selectionViewModel.clearSelection()
+                                }
+                            )
+                        } else {
+                            TopAppBar(
+                                title = {
+                                    if (isSearchActive) {
+                                        TextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            placeholder = { Text("Search title, path, folder...") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    } else {
+                                        Text(currentTab.title)
+                                    }
+                                },
+                                actions = {
+                                    IconButton(onClick = {
+                                        isSearchActive = !isSearchActive
+                                        if (!isSearchActive) searchQuery = ""
+                                    }) {
+                                        Icon(if (isSearchActive) Icons.Default.Close else Icons.Default.Search, contentDescription = "Search")
+                                    }
+                                }
+                            )
                         }
-                    )
-                } else {
-                    TopAppBar(
-                        title = {
-                            if (isSearchActive) {
-                                TextField(
-                                    value = searchQuery,
-                                    onValueChange = { searchQuery = it },
-                                    placeholder = { Text("Search title, path, folder...") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
+                    }
+                },
+                bottomBar = {
+                    if (activeViewerMedia == null && !selectionViewModel.isSelectionMode) {
+                        NavigationBar {
+                            val tabs = listOf(Screen.Photos, Screen.PDFs, Screen.Tags, Screen.Settings)
+                            tabs.forEach { tab ->
+                                NavigationBarItem(
+                                    selected = currentTab == tab,
+                                    onClick = { currentTab = tab },
+                                    icon = tab.icon,
+                                    label = { Text(tab.title) }
                                 )
-                            } else {
-                                Text(currentTab.title)
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = {
-                                isSearchActive = !isSearchActive
-                                if (!isSearchActive) searchQuery = ""
-                            }) {
-                                Icon(if (isSearchActive) Icons.Default.Close else Icons.Default.Search, contentDescription = "Search")
                             }
                         }
-                    )
+                    }
                 }
-            }
-        },
-        bottomBar = {
-            if (activeViewerMedia == null && activeTagCollection == null && !selectionViewModel.isSelectionMode) {
-                NavigationBar {
-                    val tabs = listOf(Screen.Photos, Screen.PDFs, Screen.Tags, Screen.Settings)
-                    tabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = currentTab == tab,
-                            onClick = { currentTab = tab },
-                            icon = tab.icon,
-                            label = { Text(tab.title) }
+            ) { paddingValues ->
+                Box(modifier = Modifier.padding(paddingValues)) {
+                    when (currentTab) {
+                        Screen.Photos -> GalleryScreen(
+                            searchQuery = searchQuery,
+                            selectionViewModel = selectionViewModel,
+                            onMediaClick = { activeViewerMedia = it }
                         )
+                        Screen.PDFs -> PdfScreen(
+                            searchQuery = searchQuery,
+                            selectionViewModel = selectionViewModel,
+                            onMediaClick = { activeViewerMedia = it }
+                        )
+                        Screen.Tags -> TagsScreen { tag -> activeTagCollection = tag }
+                        Screen.Settings -> SettingsScreen()
                     }
                 }
             }
         }
-    ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues)) {
-            if (activeTagCollection != null) {
-                TagCollectionScreen(
-                    tag = activeTagCollection!!,
-                    allMediaItems = allMediaList,
-                    onBack = { activeTagCollection = null },
-                    onMediaClick = { activeViewerMedia = it }
+
+        activeViewerMedia?.let { media ->
+            if (media.mediaType == MediaType.IMAGE) {
+                val photoList = remember(allMediaList) { allMediaList.filter { it.mediaType == MediaType.IMAGE } }
+                val selectedIdx = remember(photoList, media) { photoList.indexOfFirst { it.id == media.id }.coerceAtLeast(0) }
+
+                ImageViewerScreen(
+                    mediaList = if (photoList.isNotEmpty()) photoList else listOf(media),
+                    initialIndex = selectedIdx,
+                    onDismiss = { activeViewerMedia = null }
                 )
             } else {
-                when (currentTab) {
-                    Screen.Photos -> GalleryScreen(
-                        searchQuery = searchQuery,
-                        selectionViewModel = selectionViewModel,
-                        onMediaClick = { activeViewerMedia = it }
-                    )
-                    Screen.PDFs -> PdfScreen(
-                        searchQuery = searchQuery,
-                        selectionViewModel = selectionViewModel,
-                        onMediaClick = { activeViewerMedia = it }
-                    )
-                    Screen.Tags -> TagsScreen { tag -> activeTagCollection = tag }
-                    Screen.Settings -> SettingsScreen()
-                }
-            }
-
-            activeViewerMedia?.let { media ->
-                if (media.mediaType == MediaType.IMAGE) {
-                    val photoList = remember(allMediaList) { allMediaList.filter { it.mediaType == MediaType.IMAGE } }
-                    val selectedIdx = remember(photoList, media) { photoList.indexOfFirst { it.id == media.id }.coerceAtLeast(0) }
-
-                    ImageViewerScreen(
-                        mediaList = if (photoList.isNotEmpty()) photoList else listOf(media),
-                        initialIndex = selectedIdx,
-                        onDismiss = { activeViewerMedia = null }
-                    )
-                } else {
-                    PdfViewerScreen(media = media, onDismiss = { activeViewerMedia = null })
-                }
+                PdfViewerScreen(media = media, onDismiss = { activeViewerMedia = null })
             }
         }
     }

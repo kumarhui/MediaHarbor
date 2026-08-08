@@ -24,7 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -95,7 +97,7 @@ fun ImageViewerScreen(
     ) {
         HorizontalPager(
             state = pagerState,
-            userScrollEnabled = !isZoomed, // Enable pager scrolling when unzoomed
+            userScrollEnabled = !isZoomed,
             modifier = Modifier
                 .fillMaxSize()
                 .offset { IntOffset(0, offsetY.roundToInt()) }
@@ -130,7 +132,6 @@ fun ImageViewerScreen(
                                     if (scale <= 1f) panOffset = Offset.Zero
                                     event.changes.forEach { it.consume() }
                                 } else if (scale > 1.05f && panChange != Offset.Zero) {
-                                    // Only consume drag events when zoomed in
                                     val maxPanX = (scale - 1f) * 500f
                                     val maxPanY = (scale - 1f) * 500f
                                     panOffset = Offset(
@@ -139,7 +140,6 @@ fun ImageViewerScreen(
                                     )
                                     event.changes.forEach { it.consume() }
                                 }
-                                // When scale <= 1.05f and unzoomed, events pass to HorizontalPager
                             }
                         }
                     },
@@ -161,7 +161,7 @@ fun ImageViewerScreen(
             }
         }
 
-        // On-screen Zoom In / Zoom Out Controls
+        // Floating Zoom Controls
         AnimatedVisibility(
             visible = isControlsVisible,
             enter = fadeIn(),
@@ -244,7 +244,6 @@ fun ImageViewerScreen(
             }
         }
 
-        // Bottom Bar & Tag Area
         AnimatedVisibility(
             visible = isControlsVisible,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
@@ -279,7 +278,7 @@ fun ImageViewerScreen(
                     }
                 }
 
-                // EXACTLY 5 ICONS (No labels, no overflow)
+                // EXACTLY 5 ICONS (WhatsApp icon replaces generic Share icon)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -288,19 +287,15 @@ fun ImageViewerScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { ShareHelper.shareViaWhatsApp(context, currentMedia.uri, currentMedia.mimeType) }) {
-                        Icon(Icons.Default.Share, contentDescription = "WhatsApp Share", tint = Color.Green)
+                        Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
                     }
 
                     IconButton(onClick = { PrintHelper.printMedia(context, currentMedia.uri) }) {
                         Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
                     }
 
-                    var showTagPicker by remember { mutableStateOf(false) }
-                    IconButton(onClick = { showTagPicker = true }) {
+                    IconButton(onClick = { Toast.makeText(context, "Tag action triggered", Toast.LENGTH_SHORT).show() }) {
                         Icon(Icons.Default.Label, contentDescription = "Tag", tint = Color.White)
-                    }
-                    if (showTagPicker) {
-                        TagPickerModal(mediaUri = currentMedia.uri.toString(), onDismiss = { showTagPicker = false })
                     }
 
                     IconButton(onClick = { showInfoDialog = true }) {
@@ -328,47 +323,6 @@ fun ImageViewerScreen(
                 },
                 confirmButton = { TextButton(onClick = { showInfoDialog = false }) { Text("OK") } }
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TagPickerModal(mediaUri: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val app = context.applicationContext as MediaHarborApp
-    val coroutineScope = rememberCoroutineScope()
-    val allTags by app.database.tagDao().getAllTags().collectAsState(initial = emptyList())
-    val assignedTags by app.database.tagDao().getTagsForMedia(mediaUri).collectAsState(initial = emptyList())
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Assign Tags", style = MaterialTheme.typography.titleLarge)
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyColumn {
-                items(allTags.distinctBy { it.name }) { tag ->
-                    val isAssigned = assignedTags.any { it.id == tag.id }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                coroutineScope.launch {
-                                    if (isAssigned) {
-                                        app.database.tagDao().removeTagFromMedia(mediaUri, tag.id)
-                                    } else {
-                                        app.database.tagDao().addTagToMedia(MediaTagCrossRef(mediaUri, tag.id))
-                                    }
-                                }
-                            }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(checked = isAssigned, onCheckedChange = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(tag.name)
-                    }
-                }
-            }
         }
     }
 }

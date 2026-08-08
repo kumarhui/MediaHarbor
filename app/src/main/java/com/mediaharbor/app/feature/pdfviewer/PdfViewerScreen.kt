@@ -23,7 +23,6 @@ import androidx.compose.ui.unit.dp
 import com.mediaharbor.app.core.pdf.PdfRendererManager
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.ConvertPdfToImagesUseCase
-import com.mediaharbor.app.feature.imageviewer.TagPickerModal
 import com.mediaharbor.app.feature.sharing.PrintHelper
 import com.mediaharbor.app.feature.sharing.ShareHelper
 import kotlinx.coroutines.Dispatchers
@@ -167,12 +166,12 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { ShareHelper.shareViaWhatsApp(context, media.uri, media.mimeType) }) {
-                        Icon(Icons.Default.Share, contentDescription = "WhatsApp Share", tint = Color.Green)
+                        Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
                     }
                     IconButton(onClick = { PrintHelper.printMedia(context, media.uri) }) {
                         Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
                     }
-                    IconButton(onClick = { showTagPicker = true }) {
+                    IconButton(onClick = { Toast.makeText(context, "Tag action triggered", Toast.LENGTH_SHORT).show() }) {
                         Icon(Icons.Default.Label, contentDescription = "Tag", tint = Color.White)
                     }
                     IconButton(onClick = { showInfoDialog = true }) {
@@ -183,10 +182,6 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     }
                 }
             }
-        }
-
-        if (showTagPicker) {
-            TagPickerModal(mediaUri = media.uri.toString(), onDismiss = { showTagPicker = false })
         }
 
         if (showInfoDialog) {

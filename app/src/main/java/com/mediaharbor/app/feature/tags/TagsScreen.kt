@@ -183,15 +183,16 @@ fun TagCollectionScreen(
                 }
             )
         }
-    ) { padding ->
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 8.dp)
+                .padding(innerPadding)
         ) {
             Row(
-                modifier = Modifier.padding(vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 listOf("All", "Photos", "PDFs").forEach { filter ->
@@ -204,7 +205,10 @@ fun TagCollectionScreen(
             }
 
             if (filteredMedia.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text("No media assigned to this tag", style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
@@ -217,6 +221,7 @@ fun TagCollectionScreen(
                     LazyVerticalGrid(
                         state = gridState,
                         columns = GridCells.Adaptive(minSize = 110.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.fillMaxSize()
@@ -263,7 +268,7 @@ fun TagCollectionScreen(
                                                 .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
                                         )
                                         Icon(
-                                            imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.CheckCircle,
+                                            imageVector = Icons.Default.CheckCircle,
                                             contentDescription = "Selected",
                                             tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
                                             modifier = Modifier
