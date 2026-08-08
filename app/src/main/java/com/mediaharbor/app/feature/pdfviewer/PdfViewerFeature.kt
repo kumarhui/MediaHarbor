@@ -9,44 +9,65 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.mediaharbor.app.core.pdf.PdfRendererManager
+import com.mediaharbor.app.core.pdf.PdfSession
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.ConvertPdfToImagesUseCase
 import com.mediaharbor.app.feature.sharing.PrintHelper
 import com.mediaharbor.app.feature.sharing.ShareHelper
+import com.mediaharbor.app.feature.tags.components.TagPickerDialog
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.abs
 
 @Composable
 fun PdfPageRenderCard(
     pdfManager: PdfRendererManager,
+    pdfSession: PdfSession?,
     mediaItem: MediaItem,
-    pageIndex: Int
+    pageIndex: Int,
+    onTap: () -> Unit
 ) {
-    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(mediaItem.uri, pageIndex) {
+        mutableStateOf<Bitmap?>(pdfManager.getCachedPage(mediaItem.uri, pageIndex))
+    }
 
-    LaunchedEffect(mediaItem.uri, pageIndex) {
-        bitmap = pdfManager.renderPageToBitmap(mediaItem.uri, pageIndex)
+    LaunchedEffect(pdfSession, pageIndex) {
+        if (bitmap == null && pdfSession != null) {
+            bitmap = pdfManager.renderPage(pdfSession, mediaItem.uri, pageIndex)
+        }
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { onTap() })
+            },
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
@@ -56,9 +77,10 @@ fun PdfPageRenderCard(
                 .padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
-            if (bitmap != null) {
+            val currentBitmap = bitmap
+            if (currentBitmap != null) {
                 Image(
-                    bitmap = bitmap!!.asImageBitmap(),
+                    bitmap = currentBitmap.asImageBitmap(),
                     contentDescription = "Page ${pageIndex + 1}",
                     modifier = Modifier.fillMaxWidth(),
                     contentScale = ContentScale.FillWidth
@@ -67,7 +89,7 @@ fun PdfPageRenderCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp),
+                        .height(260.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator()
@@ -77,25 +99,64 @@ fun PdfPageRenderCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val pdfManager = remember { PdfRendererManager(context) }
+    val listState = rememberLazyListState()
 
+    var pdfSession by remember { mutableStateOf<PdfSession?>(null) }
     var isPasswordRequired by remember { mutableStateOf(false) }
     var isUnlocked by remember { mutableStateOf(true) }
     var passwordInput by remember { mutableStateOf("") }
     var pageCount by remember { mutableIntStateOf(0) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showTagPickerDialog by remember { mutableStateOf(false) }
+    var isChromeVisible by remember { mutableStateOf(true) }
+
+    // Shared document-level viewport state for whole-PDF zoom & pan
+    var docScale by remember { mutableFloatStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+
+    val currentPage by remember {
+        derivedStateOf {
+            if (pageCount == 0) 0 else (listState.firstVisibleItemIndex + 1).coerceAtMost(pageCount)
+        }
+    }
 
     LaunchedEffect(media.uri) {
-        val count = pdfManager.getPageCount(media.uri)
-        if (count == 0) {
+        val session = pdfManager.openSession(media.uri)
+        if (session != null) {
+            pdfSession = session
+            val count = pdfManager.getPageCount(session)
+            if (count > 0) {
+                pageCount = count
+                isUnlocked = true
+                isPasswordRequired = false
+            } else {
+                isPasswordRequired = true
+                isUnlocked = false
+            }
+        } else {
             isPasswordRequired = true
             isUnlocked = false
-        } else {
-            pageCount = count
+        }
+    }
+
+    DisposableEffect(media.uri) {
+        onDispose {
+            pdfSession?.close()
+            pdfSession = null
+        }
+    }
+
+    LaunchedEffect(currentPage, pdfSession, pageCount) {
+        val session = pdfSession
+        if (session != null && pageCount > 0) {
+            pdfManager.preloadNearbyPages(session, media.uri, currentPage - 1, pageCount)
         }
     }
 
@@ -114,7 +175,6 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
     }
 
     fun executeDelete(item: MediaItem) {
-        // Handle direct filesystem file deletion if URI scheme is "file"
         if (item.uri.scheme == "file") {
             try {
                 val file = File(item.uri.path ?: "")
@@ -209,59 +269,148 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
             )
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.primary)
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                AnimatedVisibility(
+                    visible = isChromeVisible,
+                    enter = fadeIn() + slideInVertically(),
+                    exit = fadeOut() + slideOutVertically()
                 ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
-                    }
-                    Text(
-                        media.displayName,
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1
-                    )
-                    var overflowExpanded by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { overflowExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = Color.White)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.primary)
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = onDismiss) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    media.displayName,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1
+                                )
+                                if (pageCount > 0) {
+                                    Text(
+                                        "Page $currentPage / $pageCount",
+                                        color = Color.White.copy(alpha = 0.8f),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                            var overflowExpanded by remember { mutableStateOf(false) }
+                            Box {
+                                IconButton(onClick = { overflowExpanded = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = Color.White)
+                                }
+                                DropdownMenu(expanded = overflowExpanded, onDismissRequest = { overflowExpanded = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Convert to Images") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            coroutineScope.launch {
+                                                ConvertPdfToImagesUseCase(context)(media.uri, media.displayName.removeSuffix(".pdf")) { _, _ -> }
+                                                Toast.makeText(context, "Converted PDF to Images in Pictures/MediaHarbor", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            showDeleteConfirmDialog = true
+                                        }
+                                    )
+                                }
+                            }
                         }
-                        DropdownMenu(expanded = overflowExpanded, onDismissRequest = { overflowExpanded = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Convert to Images") },
-                                onClick = {
-                                    overflowExpanded = false
-                                    coroutineScope.launch {
-                                        ConvertPdfToImagesUseCase(context)(media.uri, media.displayName.removeSuffix(".pdf")) { _, _ -> }
-                                        Toast.makeText(context, "Converted PDF to Images in Pictures/MediaHarbor", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete") },
-                                onClick = {
-                                    overflowExpanded = false
-                                    executeDelete(media)
-                                }
+
+                        // Horizontal Reading Progress Bar immediately below Top Bar
+                        if (pageCount > 0) {
+                            val readingProgress = (currentPage.toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
+                            LinearProgressIndicator(
+                                progress = { readingProgress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp),
+                                color = MaterialTheme.colorScheme.secondary,
+                                trackColor = Color.White.copy(alpha = 0.3f)
                             )
                         }
                     }
                 }
 
                 if (pageCount > 0) {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { isChromeVisible = !isChromeVisible },
+                                    onDoubleTap = {
+                                        if (docScale > 1.05f) {
+                                            docScale = 1f
+                                            panOffset = Offset.Zero
+                                        } else {
+                                            docScale = 2.5f
+                                        }
+                                    }
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val zoomChange = event.calculateZoom()
+                                        val panChange = event.calculatePan()
+
+                                        if (zoomChange != 1f) {
+                                            docScale = (docScale * zoomChange).coerceIn(1f, 5f)
+                                            if (docScale <= 1f) panOffset = Offset.Zero
+                                            event.changes.forEach { it.consume() }
+                                        } else if (docScale > 1.05f && panChange != Offset.Zero) {
+                                            val maxPanX = (docScale - 1f) * 500f
+                                            // Handle horizontal panning for zoomed content while letting vertical gestures scroll the LazyColumn
+                                            panOffset = Offset(
+                                                x = (panOffset.x + panChange.x).coerceIn(-maxPanX, maxPanX),
+                                                y = 0f
+                                            )
+                                            // Only consume horizontal pan gestures so vertical drags smoothly navigate pages
+                                            if (abs(panChange.x) > abs(panChange.y)) {
+                                                event.changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                     ) {
-                        items(pageCount) { index ->
-                            PdfPageRenderCard(pdfManager = pdfManager, mediaItem = media, pageIndex = index)
+                        LazyColumn(
+                            state = listState,
+                            userScrollEnabled = true, // Always allow vertical document scrolling across pages
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    scaleX = docScale
+                                    scaleY = docScale
+                                    translationX = panOffset.x
+                                    translationY = panOffset.y
+                                },
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            items(pageCount) { index ->
+                                PdfPageRenderCard(
+                                    pdfManager = pdfManager,
+                                    pdfSession = pdfSession,
+                                    mediaItem = media,
+                                    pageIndex = index,
+                                    onTap = { isChromeVisible = !isChromeVisible }
+                                )
+                            }
                         }
                     }
                 } else {
@@ -270,32 +419,120 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.85f))
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
+                AnimatedVisibility(
+                    visible = isChromeVisible,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
                 ) {
-                    IconButton(onClick = { ShareHelper.shareViaWhatsApp(context, media.uri, media.mimeType) }) {
-                        Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
-                    }
-                    IconButton(onClick = { PrintHelper.printMedia(context, media.uri) }) {
-                        Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
-                    }
-                    IconButton(onClick = { Toast.makeText(context, "Tag action triggered", Toast.LENGTH_SHORT).show() }) {
-                        Icon(Icons.Default.Label, contentDescription = "Tag", tint = Color.White)
-                    }
-                    IconButton(onClick = { showInfoDialog = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
-                    }
-                    IconButton(onClick = { executeDelete(media) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.85f))
+                            .windowInsetsPadding(WindowInsets.navigationBars)
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                docScale = (docScale - 0.5f).coerceAtLeast(1f)
+                                if (docScale == 1f) panOffset = Offset.Zero
+                            }
+                        ) {
+                            Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", tint = Color.White)
+                        }
+
+                        IconButton(
+                            onClick = {
+                                docScale = (docScale + 0.5f).coerceAtMost(5f)
+                            }
+                        ) {
+                            Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", tint = Color.White)
+                        }
+
+                        IconButton(
+                            enabled = currentPage > 1,
+                            onClick = {
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem((currentPage - 2).coerceAtLeast(0))
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.NavigateBefore,
+                                contentDescription = "Previous Page",
+                                tint = if (currentPage > 1) Color.White else Color.Gray
+                            )
+                        }
+
+                        IconButton(onClick = { ShareHelper.shareViaWhatsApp(context, media.uri, media.mimeType) }) {
+                            Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
+                        }
+
+                        IconButton(onClick = { PrintHelper.printPdf(context, media.uri, media.displayName) }) {
+                            Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
+                        }
+
+                        IconButton(onClick = { showTagPickerDialog = true }) {
+                            Icon(Icons.Default.Label, contentDescription = "Tag", tint = Color.White)
+                        }
+
+                        IconButton(onClick = { showInfoDialog = true }) {
+                            Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
+                        }
+
+                        IconButton(onClick = { showDeleteConfirmDialog = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                        }
+
+                        IconButton(
+                            enabled = currentPage < pageCount,
+                            onClick = {
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem(currentPage.coerceAtMost(pageCount - 1))
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.NavigateNext,
+                                contentDescription = "Next Page",
+                                tint = if (currentPage < pageCount) Color.White else Color.Gray
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        if (showTagPickerDialog) {
+            TagPickerDialog(
+                mediaUri = media.uri.toString(),
+                onDismiss = { showTagPickerDialog = false }
+            )
+        }
+
+        if (showDeleteConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirmDialog = false },
+                title = { Text("Delete PDF Document?") },
+                text = { Text("Are you sure you want to delete '${media.displayName}'?") },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        onClick = {
+                            showDeleteConfirmDialog = false
+                            executeDelete(media)
+                        }
+                    ) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         if (showInfoDialog) {

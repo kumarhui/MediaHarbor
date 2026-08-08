@@ -18,16 +18,26 @@ import com.mediaharbor.app.domain.model.MediaType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class MediaStorePdfDataSource(private val context: Context) {
 
-    fun fetchPdfs(): Flow<List<MediaItem>> = callbackFlow {
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private var cachedPdfs: List<MediaItem>? = null
+
+    fun fetchPdfs(forceRefresh: Boolean = false): Flow<List<MediaItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
                 Log.d("PDF_DEBUG", "ContentObserver onChange triggered")
+                cachedPdfs = null
                 trySend(queryPdfs())
             }
         }
@@ -44,8 +54,12 @@ class MediaStorePdfDataSource(private val context: Context) {
             Log.e("PDF_DEBUG", "Failed to register content observer", e)
         }
 
-        // Emit initial scan
-        trySend(queryPdfs())
+        if (cachedPdfs != null && !forceRefresh) {
+            Log.d("PDF_DEBUG", "Returning cached PDFs (${cachedPdfs?.size} items)")
+            trySend(cachedPdfs!!)
+        } else {
+            trySend(queryPdfs())
+        }
 
         awaitClose {
             try {
@@ -56,31 +70,33 @@ class MediaStorePdfDataSource(private val context: Context) {
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun queryPdfs(): List<MediaItem> {
-        val isExternalManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            true
-        }
-
-        Log.d("PDF_DEBUG", "External storage manager = $isExternalManager")
-
-        // Primary: Device-wide recursive filesystem scan if MANAGE_EXTERNAL_STORAGE is granted
-        if (isExternalManager) {
-            val fsPdfs = scanFilesystemPdfs()
-            if (fsPdfs.isNotEmpty()) {
-                return fsPdfs
+    fun queryPdfs(): List<MediaItem> {
+        _isScanning.value = true
+        try {
+            val isExternalManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Environment.isExternalStorageManager()
+            } else {
+                true
             }
-        }
 
-        // Secondary / Fallback: MediaStore Query
-        return queryMediaStorePdfs()
+            Log.d("PDF_DEBUG", "External storage manager = $isExternalManager")
+
+            val result = if (isExternalManager) {
+                val fsPdfs = scanFilesystemPdfs()
+                if (fsPdfs.isNotEmpty()) fsPdfs else queryMediaStorePdfs()
+            } else {
+                queryMediaStorePdfs()
+            }
+
+            cachedPdfs = result
+            return result
+        } finally {
+            _isScanning.value = false
+        }
     }
 
     private fun scanFilesystemPdfs(): List<MediaItem> {
         Log.d("PDF_DEBUG", "Starting PDF filesystem scan")
-        Log.d("PDF_DEBUG", "External storage manager = ${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager() else true}")
-
         val list = mutableListOf<MediaItem>()
         val rootDir = Environment.getExternalStorageDirectory()
 
@@ -96,7 +112,6 @@ class MediaStorePdfDataSource(private val context: Context) {
                 if (file.isDirectory) {
                     val normalizedName = name.lowercase()
                     val path = file.absolutePath.lowercase()
-                    // Exclude internal, temporary, cache, recycle/trash, and application-private directories
                     if (name.startsWith(".") ||
                         normalizedName == "android" ||
                         path.contains("/android/data") ||
@@ -173,16 +188,6 @@ class MediaStorePdfDataSource(private val context: Context) {
         val selectionArgs = arrayOf("application/pdf")
         val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
 
-        val hasReadExternal = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-        val hasReadImages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-        } else true
-
-        Log.d("PDF_DEBUG", "Starting MediaStore PDF scan")
-        Log.d("PDF_DEBUG", "SDK = ${Build.VERSION.SDK_INT}")
-        Log.d("PDF_DEBUG", "Permission READ_EXTERNAL_STORAGE = $hasReadExternal, READ_MEDIA_IMAGES = $hasReadImages")
-        Log.d("PDF_DEBUG", "URI = $collectionUri")
-
         val list = mutableListOf<MediaItem>()
 
         try {
@@ -222,8 +227,6 @@ class MediaStorePdfDataSource(private val context: Context) {
 
                         if (!isTrashed) {
                             val contentUri = ContentUris.withAppendedId(collectionUri, id)
-                            Log.d("PDF_DEBUG", "FOUND PDF: id=$id, name=$displayName, mime=$mimeType, path=$relativePath")
-
                             val mediaItem = MediaItem(
                                 id = id,
                                 uri = contentUri,
@@ -239,8 +242,6 @@ class MediaStorePdfDataSource(private val context: Context) {
                                 height = 0,
                                 mediaType = MediaType.PDF
                             )
-
-                            Log.d("PDF_DEBUG", "Mapped PDF MediaItem: id=${mediaItem.id} uri=${mediaItem.uri}")
                             list.add(mediaItem)
                         }
                     }

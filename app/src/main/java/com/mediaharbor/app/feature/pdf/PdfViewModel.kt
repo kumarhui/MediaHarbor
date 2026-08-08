@@ -37,16 +37,21 @@ import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.GetPdfsUseCase
 import com.mediaharbor.app.domain.usecase.SearchMediaUseCase
 import com.mediaharbor.app.feature.selection.SelectionViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class PdfViewModel(context: android.content.Context) : ViewModel() {
+    private val pdfDataSource = MediaStorePdfDataSource(context)
     private val repo = MediaRepositoryImpl(
         MediaStoreImageDataSource(context),
-        MediaStorePdfDataSource(context)
+        pdfDataSource
     )
     private val getPdfsUseCase = GetPdfsUseCase(repo)
     private val searchUseCase = SearchMediaUseCase()
 
     val pdfsFlow = getPdfsUseCase()
+    val isScanning: StateFlow<Boolean> = pdfDataSource.isScanning
 
     fun filterPdfs(pdfs: List<MediaItem>, query: String): List<MediaItem> {
         return searchUseCase(pdfs, query)
@@ -63,7 +68,16 @@ fun PdfScreen(
     val context = LocalContext.current
     val viewModel = remember { PdfViewModel(context) }
     val pdfs by viewModel.pdfsFlow.collectAsState(initial = emptyList())
+    val isScanning by viewModel.isScanning.collectAsState()
+
+    var isInitialLoading by remember { mutableStateOf(true) }
     val filtered = remember(pdfs, searchQuery) { viewModel.filterPdfs(pdfs, searchQuery) }
+
+    LaunchedEffect(pdfs, isScanning) {
+        if (pdfs.isNotEmpty() || !isScanning) {
+            isInitialLoading = false
+        }
+    }
 
     var hasPermission by remember { mutableStateOf(PermissionUtils.hasAllFilesPermission()) }
 
@@ -131,13 +145,25 @@ fun PdfScreen(
                 }
             }
         }
+    } else if (isInitialLoading && filtered.isEmpty()) {
+        // State 2: Active loading
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Scanning PDF documents...", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+            }
+        }
     } else if (filtered.isEmpty()) {
-        // State 2: Permission granted + no PDFs
+        // State 3: Permission granted + scan complete + no PDFs
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No PDF documents found", style = MaterialTheme.typography.bodyLarge)
         }
     } else {
-        // State 3: Permission granted + PDFs found
+        // State 4: Permission granted + PDFs found
         LazyColumn(
             contentPadding = PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)

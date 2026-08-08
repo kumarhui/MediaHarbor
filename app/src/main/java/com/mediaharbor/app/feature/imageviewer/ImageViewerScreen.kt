@@ -40,6 +40,7 @@ import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.ConvertImageToPdfUseCase
 import com.mediaharbor.app.feature.sharing.PrintHelper
 import com.mediaharbor.app.feature.sharing.ShareHelper
+import com.mediaharbor.app.feature.tags.components.TagPickerDialog
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -68,6 +69,8 @@ fun ImageViewerScreen(
     var isControlsVisible by remember { mutableStateOf(true) }
     var offsetY by remember { mutableFloatStateOf(0f) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showTagPickerDialog by remember { mutableStateOf(false) }
 
     val safePage = pagerState.currentPage.coerceIn(0, activeList.size - 1)
     val currentMedia = activeList.getOrNull(safePage) ?: activeList[0]
@@ -118,7 +121,6 @@ fun ImageViewerScreen(
 
     fun executeDelete(item: MediaItem) {
         try {
-            // First attempt direct deletion (succeeds if app owns the file)
             val rows = context.contentResolver.delete(item.uri, null, null)
             if (rows > 0) {
                 val newList = activeList.filter { it.id != item.id }
@@ -133,7 +135,6 @@ fun ImageViewerScreen(
                 return
             }
         } catch (secEx: SecurityException) {
-            // Requires system authorization on Android 11+ (API 30+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
                     val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(item.uri))
@@ -146,7 +147,6 @@ fun ImageViewerScreen(
                 }
             }
         } catch (e: RecoverableSecurityException) {
-            // Requires system authorization on Android 10 (API 29)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 pendingDeleteMedia = item
                 deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
@@ -157,7 +157,6 @@ fun ImageViewerScreen(
             return
         }
 
-        // Fallback for API 30+ if direct delete returned 0 without exception
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(item.uri))
@@ -338,7 +337,7 @@ fun ImageViewerScreen(
                             text = { Text("Delete") },
                             onClick = {
                                 overflowExpanded = false
-                                executeDelete(currentMedia)
+                                showDeleteConfirmDialog = true
                             }
                         )
                     }
@@ -393,11 +392,11 @@ fun ImageViewerScreen(
                         Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
                     }
 
-                    IconButton(onClick = { PrintHelper.printMedia(context, currentMedia.uri) }) {
+                    IconButton(onClick = { PrintHelper.printPdf(context, currentMedia.uri, currentMedia.displayName) }) {
                         Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
                     }
 
-                    IconButton(onClick = { Toast.makeText(context, "Tag action triggered", Toast.LENGTH_SHORT).show() }) {
+                    IconButton(onClick = { showTagPickerDialog = true }) {
                         Icon(Icons.Default.Label, contentDescription = "Tag", tint = Color.White)
                     }
 
@@ -405,11 +404,42 @@ fun ImageViewerScreen(
                         Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
                     }
 
-                    IconButton(onClick = { executeDelete(currentMedia) }) {
+                    IconButton(onClick = { showDeleteConfirmDialog = true }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
                     }
                 }
             }
+        }
+
+        if (showTagPickerDialog) {
+            TagPickerDialog(
+                mediaUri = currentMedia.uri.toString(),
+                onDismiss = { showTagPickerDialog = false }
+            )
+        }
+
+        if (showDeleteConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirmDialog = false },
+                title = { Text("Delete Image?") },
+                text = { Text("Are you sure you want to delete '${currentMedia.displayName}'?") },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        onClick = {
+                            showDeleteConfirmDialog = false
+                            executeDelete(currentMedia)
+                        }
+                    ) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         if (showInfoDialog) {
