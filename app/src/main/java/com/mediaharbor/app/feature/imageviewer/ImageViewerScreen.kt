@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -81,6 +82,7 @@ fun ImageViewerScreen(
     // Zoom and pan state
     var scale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var containerSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
 
     LaunchedEffect(pagerState.currentPage) {
         scale = 1f
@@ -174,6 +176,7 @@ fun ImageViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = ((1f - (offsetY / 1000f)).coerceIn(0.2f, 1f))))
+            .onGloballyPositioned { containerSize = it.size }
             .pointerInput(isZoomed) {
                 if (!isZoomed) {
                     detectVerticalDragGestures(
@@ -189,7 +192,7 @@ fun ImageViewerScreen(
     ) {
         HorizontalPager(
             state = pagerState,
-            userScrollEnabled = !isZoomed,
+            userScrollEnabled = true,
             modifier = Modifier
                 .fillMaxSize()
                 .offset { IntOffset(0, offsetY.roundToInt()) }
@@ -224,13 +227,21 @@ fun ImageViewerScreen(
                                     if (scale <= 1f) panOffset = Offset.Zero
                                     event.changes.forEach { it.consume() }
                                 } else if (scale > 1.05f && panChange != Offset.Zero) {
-                                    val maxPanX = (scale - 1f) * 500f
-                                    val maxPanY = (scale - 1f) * 500f
-                                    panOffset = Offset(
-                                        x = (panOffset.x + panChange.x).coerceIn(-maxPanX, maxPanX),
-                                        y = (panOffset.y + panChange.y).coerceIn(-maxPanY, maxPanY)
-                                    )
-                                    event.changes.forEach { it.consume() }
+                                    val maxPanX = ((scale - 1f) * containerSize.width / 2f).coerceAtLeast(0f)
+                                    val maxPanY = ((scale - 1f) * containerSize.height / 2f).coerceAtLeast(0f)
+
+                                    val newX = panOffset.x + panChange.x
+                                    val newY = (panOffset.y + panChange.y).coerceIn(-maxPanY, maxPanY)
+
+                                    val isAtLeftBoundary = panOffset.x >= maxPanX && panChange.x > 0
+                                    val isAtRightBoundary = panOffset.x <= -maxPanX && panChange.x < 0
+
+                                    if (!isAtLeftBoundary && !isAtRightBoundary) {
+                                        panOffset = Offset(newX.coerceIn(-maxPanX, maxPanX), newY)
+                                        event.changes.forEach { it.consume() }
+                                    } else {
+                                        panOffset = Offset(panOffset.x, newY)
+                                    }
                                 }
                             }
                         }

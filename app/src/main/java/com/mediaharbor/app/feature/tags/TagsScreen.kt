@@ -1,7 +1,9 @@
 package com.mediaharbor.app.feature.tags
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -38,7 +40,7 @@ private data class TagStats(
     val pdfCount: Int = 0
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TagsScreen(
     allMediaItems: List<MediaItem>,
@@ -66,6 +68,7 @@ fun TagsScreen(
     }
 
     var showCreateDialog by remember { mutableStateOf(false) }
+    var contextMenuTag by remember { mutableStateOf<TagEntity?>(null) }
     var tagToEdit by remember { mutableStateOf<TagEntity?>(null) }
     var tagToDelete by remember { mutableStateOf<TagEntity?>(null) }
 
@@ -90,7 +93,10 @@ fun TagsScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onTagClick(tag) }
+                            .combinedClickable(
+                                onClick = { onTagClick(tag) },
+                                onLongClick = { contextMenuTag = tag }
+                            )
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
@@ -99,7 +105,7 @@ fun TagsScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(24.dp)
+                                        .size(20.dp)
                                         .clip(CircleShape)
                                         .background(
                                             try { Color(android.graphics.Color.parseColor(tag.colorHex)) }
@@ -112,19 +118,9 @@ fun TagsScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     modifier = Modifier.weight(1f)
                                 )
-                                IconButton(onClick = { tagToEdit = tag }) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edit Tag")
-                                }
-                                IconButton(onClick = { tagToDelete = tag }) {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = "Delete Tag",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                }
                             }
 
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             if (stats.fileCount > 0) {
                                 Text(
                                     text = "${stats.fileCount} file${if (stats.fileCount > 1) "s" else ""} • ${FileUtils.formatFileSize(stats.totalSize)}",
@@ -160,6 +156,52 @@ fun TagsScreen(
         }
     }
 
+    contextMenuTag?.let { tag ->
+        AlertDialog(
+            onDismissRequest = { contextMenuTag = null },
+            title = { Text(tag.name) },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = {
+                            val t = contextMenuTag
+                            contextMenuTag = null
+                            tagToEdit = t
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Edit, contentDescription = null)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("Edit Tag", style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
+                    TextButton(
+                        onClick = {
+                            val t = contextMenuTag
+                            contextMenuTag = null
+                            tagToDelete = t
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("Delete Tag", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { contextMenuTag = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (showCreateDialog) {
         CreateEditTagDialog(
             title = "Create Tag",
@@ -193,8 +235,8 @@ fun TagsScreen(
     tagToDelete?.let { tag ->
         AlertDialog(
             onDismissRequest = { tagToDelete = null },
-            title = { Text("Delete Tag?") },
-            text = { Text("Are you sure you want to delete the '${tag.name}' tag?") },
+            title = { Text("Delete ${tag.name}?") },
+            text = { Text("This tag will be removed from all associated files.") },
             confirmButton = {
                 Button(
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),

@@ -40,6 +40,9 @@ interface TagDao {
     @Query("DELETE FROM media_tag_cross_ref WHERE mediaUri = :mediaUri AND tagId = :tagId")
     suspend fun removeTagFromMedia(mediaUri: String, tagId: Long)
 
+    @Query("DELETE FROM media_tag_cross_ref WHERE mediaUri IN (:mediaUris)")
+    suspend fun removeTagsForMediaUris(mediaUris: List<String>)
+
     @Query("SELECT mediaUri FROM media_tag_cross_ref WHERE tagId = :tagId")
     fun getMediaUrisForTag(tagId: Long): Flow<List<String>>
 

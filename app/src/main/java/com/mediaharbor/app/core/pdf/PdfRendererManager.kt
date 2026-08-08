@@ -30,7 +30,6 @@ class PdfSession(
 
 class PdfRendererManager(private val context: Context) {
 
-    // Memory allocation tuned to 30% of available heap (min 32MB, max 128MB)
     private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
     private val cacheSize = (maxMemory / 3).coerceIn(32768, 131072) // KB
 
@@ -77,14 +76,36 @@ class PdfRendererManager(private val context: Context) {
 
     fun getCachedPage(pdfUri: Uri, pageIndex: Int): Bitmap? {
         val cacheKey = "${pdfUri}_$pageIndex"
-        Log.d("PDF_CACHE", "Page $pageIndex requested")
-        val cached = pageCache.get(cacheKey)
-        if (cached != null) {
-            Log.d("PDF_CACHE", "CACHE HIT page=$pageIndex")
-        } else {
-            Log.d("PDF_CACHE", "CACHE MISS page=$pageIndex")
+        return pageCache.get(cacheKey)
+    }
+
+    fun getCachedThumbnail(pdfUri: Uri): Bitmap? {
+        val cacheKey = "${pdfUri}_thumb"
+        return pageCache.get(cacheKey)
+    }
+
+    suspend fun renderThumbnail(pdfUri: Uri): Bitmap? = withContext(Dispatchers.IO) {
+        val cacheKey = "${pdfUri}_thumb"
+        pageCache.get(cacheKey)?.let { return@withContext it }
+
+        val session = openSession(pdfUri) ?: return@withContext null
+        try {
+            session.mutex.withLock {
+                if (session.isClosed || session.renderer.pageCount == 0) return@withContext null
+                val page = session.renderer.openPage(0)
+                val width = (page.width * 0.5f).toInt().coerceAtLeast(1)
+                val height = (page.height * 0.5f).toInt().coerceAtLeast(1)
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                page.close()
+                pageCache.put(cacheKey, bitmap)
+                bitmap
+            }
+        } catch (e: Exception) {
+            null
+        } finally {
+            session.close()
         }
-        return cached
     }
 
     suspend fun renderPage(

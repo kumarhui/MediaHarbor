@@ -2,6 +2,8 @@ package com.mediaharbor.app
 
 import android.app.Activity
 import android.app.RecoverableSecurityException
+import android.content.Context
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -13,9 +15,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -30,6 +31,7 @@ import com.mediaharbor.app.core.common.PermissionUtils
 import com.mediaharbor.app.data.local.entity.TagEntity
 import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
+import com.mediaharbor.app.data.settings.SettingsManager
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.model.MediaType
 import com.mediaharbor.app.feature.gallery.GalleryScreen
@@ -45,14 +47,31 @@ import com.mediaharbor.app.feature.tags.TagCollectionScreen
 import com.mediaharbor.app.feature.tags.TagsScreen
 import com.mediaharbor.app.navigation.Screen
 import kotlinx.coroutines.flow.combine
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var lastBackPressTime = 0L
 
+    override fun attachBaseContext(newBase: Context) {
+        val settings = SettingsManager.getInstance(newBase)
+        val lang = settings.language.value
+        val locale = Locale(lang)
+        Locale.setDefault(locale)
+        val config = Configuration(newBase.resources.configuration)
+        config.setLocale(locale)
+        super.attachBaseContext(newBase.createConfigurationContext(config))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            val settingsManager = remember { SettingsManager.getInstance(this) }
+            val isDarkMode by settingsManager.isDarkMode.collectAsState()
+            val useDark = isDarkMode || (isSystemInDarkTheme() && !isDarkMode)
+
+            MaterialTheme(
+                colorScheme = if (useDark) darkColorScheme() else lightColorScheme()
+            ) {
                 MainAppStructure(
                     onDoubleBackExit = {
                         val currentTime = System.currentTimeMillis()
@@ -92,11 +111,6 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
         }.collect { combinedList ->
             allMediaList = combinedList
         }
-    }
-
-    LaunchedEffect(allMediaList) {
-        val pdfCount = allMediaList.count { it.mediaType == MediaType.PDF }
-        Log.d("PDF_DEBUG", "MainActivity allMediaList updated, total items: ${allMediaList.size}, PDFs count: $pdfCount")
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -183,27 +197,6 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
                                                     }
                                                     Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
                                                     selectionViewModel.clearSelection()
-                                                }
-                                            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                                try {
-                                                    var count = 0
-                                                    var firstEx: RecoverableSecurityException? = null
-                                                    itemsToDelete.forEach { item ->
-                                                        try {
-                                                            if (context.contentResolver.delete(item.uri, null, null) > 0) count++
-                                                        } catch (e: RecoverableSecurityException) {
-                                                            if (firstEx == null) firstEx = e
-                                                        } catch (_: Exception) {}
-                                                    }
-                                                    if (firstEx != null) {
-                                                        pendingBatchDeleteItems = itemsToDelete
-                                                        batchDeleteLauncher.launch(IntentSenderRequest.Builder(firstEx!!.userAction.actionIntent.intentSender).build())
-                                                    } else {
-                                                        Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
-                                                        selectionViewModel.clearSelection()
-                                                    }
-                                                } catch (e: Exception) {
-                                                    Toast.makeText(context, "Could not delete selected items", Toast.LENGTH_SHORT).show()
                                                 }
                                             } else {
                                                 var count = 0

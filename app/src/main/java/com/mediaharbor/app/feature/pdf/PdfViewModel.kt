@@ -1,6 +1,7 @@
 package com.mediaharbor.app.feature.pdf
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -8,6 +9,8 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -28,23 +31,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import com.mediaharbor.app.MediaHarborApp
 import com.mediaharbor.app.core.common.FileUtils
 import com.mediaharbor.app.core.common.PermissionUtils
+import com.mediaharbor.app.core.pdf.PdfRendererManager
 import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
 import com.mediaharbor.app.data.repository.MediaRepositoryImpl
+import com.mediaharbor.app.data.settings.SettingsManager
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.GetPdfsUseCase
 import com.mediaharbor.app.domain.usecase.SearchMediaUseCase
 import com.mediaharbor.app.feature.selection.DragSelectContainer
 import com.mediaharbor.app.feature.selection.SelectionViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 
 class PdfViewModel(context: android.content.Context) : ViewModel() {
     private val pdfDataSource = MediaStorePdfDataSource(context)
@@ -63,6 +73,45 @@ class PdfViewModel(context: android.content.Context) : ViewModel() {
     }
 }
 
+@Composable
+fun PdfThumbnailView(
+    pdfManager: PdfRendererManager,
+    uri: Uri,
+    modifier: Modifier = Modifier
+) {
+    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(pdfManager.getCachedThumbnail(uri)) }
+
+    LaunchedEffect(uri) {
+        if (bitmap == null) {
+            withContext(Dispatchers.IO) {
+                bitmap = pdfManager.renderThumbnail(uri)
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        val currentBitmap = bitmap
+        if (currentBitmap != null) {
+            Image(
+                bitmap = currentBitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.PictureAsPdf,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(36.dp)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PdfScreen(
@@ -72,7 +121,11 @@ fun PdfScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as? MediaHarborApp
+    val settingsManager = remember { SettingsManager.getInstance(context) }
+    val pdfColumns by settingsManager.pdfColumns.collectAsState()
+
     val viewModel = remember { PdfViewModel(context) }
+    val pdfManager = remember { PdfRendererManager(context) }
     val initialPdfs = remember { MediaStorePdfDataSource.getCachedPdfs() ?: emptyList() }
     val pdfs by viewModel.pdfsFlow.collectAsState(initial = initialPdfs)
     val isScanning by viewModel.isScanning.collectAsState()
@@ -100,10 +153,6 @@ fun PdfScreen(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
         hasPermission = PermissionUtils.hasAllFilesPermission()
-    }
-
-    LaunchedEffect(filtered.size) {
-        Log.d("PDF_DEBUG", "PDF tab count=${filtered.size}")
     }
 
     if (!hasPermission) {
@@ -183,8 +232,9 @@ fun PdfScreen(
         ) {
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Fixed(1),
-                contentPadding = PaddingValues(8.dp),
+                columns = GridCells.Fixed(pdfColumns),
+                contentPadding = PaddingValues(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 80.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -192,84 +242,127 @@ fun PdfScreen(
                     val isSelected = selectionViewModel.isSelected(pdf)
                     val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
 
-                    Card(
+                    PdfGridCard(
+                        pdf = pdf,
+                        pdfManager = pdfManager,
+                        isSelectionMode = selectionViewModel.isSelectionMode,
+                        isSelected = isSelected,
+                        tagCount = tagCount,
+                        onClick = {
+                            if (selectionViewModel.isSelectionMode) {
+                                selectionViewModel.toggleSelection(pdf)
+                            } else {
+                                onMediaClick(pdf)
+                            }
+                        },
+                        onLongClick = {
+                            selectionViewModel.startSelection(pdf)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PdfGridCard(
+    pdf: MediaItem,
+    pdfManager: PdfRendererManager,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    tagCount: Int,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
+        colors = if (isSelected) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        else CardDefaults.cardColors()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.85f)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+            ) {
+                PdfThumbnailView(
+                    pdfManager = pdfManager,
+                    uri = pdf.uri,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                if (tagCount > 0) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        tonalElevation = 2.dp,
+                        shadowElevation = 2.dp,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .combinedClickable(
-                                onClick = {
-                                    if (selectionViewModel.isSelectionMode) {
-                                        selectionViewModel.toggleSelection(pdf)
-                                    } else {
-                                        onMediaClick(pdf)
-                                    }
-                                },
-                                onLongClick = {
-                                    selectionViewModel.startSelection(pdf)
-                                }
-                            ),
-                        colors = if (isSelected) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                        else CardDefaults.cardColors()
+                            .align(Alignment.BottomStart)
+                            .padding(6.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
-                            if (selectionViewModel.isSelectionMode) {
-                                Icon(
-                                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Outlined.Circle,
-                                    contentDescription = "Selected",
-                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                            }
-
                             Icon(
-                                imageVector = Icons.Default.PictureAsPdf,
-                                contentDescription = "PDF",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(40.dp)
+                                imageVector = Icons.Default.Label,
+                                contentDescription = "Tags",
+                                modifier = Modifier.size(12.dp)
                             )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(pdf.displayName, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    "${FileUtils.formatFileSize(pdf.size)} • ${pdf.relativePath}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
-                            }
-
-                            if (tagCount > 0) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Label,
-                                            contentDescription = "Tags",
-                                            modifier = Modifier.size(12.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(2.dp))
-                                        Text(
-                                            text = "$tagCount",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = "$tagCount",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
+
+                if (isSelectionMode) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
+                    )
+                    Icon(
+                        imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Outlined.Circle,
+                        contentDescription = "Selected",
+                        tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .size(24.dp)
+                            .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    text = pdf.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = FileUtils.formatFileSize(pdf.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

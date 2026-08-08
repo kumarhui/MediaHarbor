@@ -30,6 +30,7 @@ import com.mediaharbor.app.MediaHarborApp
 import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
 import com.mediaharbor.app.data.repository.MediaRepositoryImpl
+import com.mediaharbor.app.data.settings.SettingsManager
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.GetPhotosUseCase
 import com.mediaharbor.app.domain.usecase.SearchMediaUseCase
@@ -59,6 +60,9 @@ fun GalleryScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as? MediaHarborApp
+    val settingsManager = remember { SettingsManager.getInstance(context) }
+    val photoColumns by settingsManager.photoColumns.collectAsState()
+
     val viewModel = remember { GalleryViewModel(context) }
     val initialPhotos = remember { MediaStoreImageDataSource.getCachedImages() ?: emptyList() }
     val photos by viewModel.photosFlow.collectAsState(initial = initialPhotos)
@@ -96,7 +100,7 @@ fun GalleryScreen(
         ) {
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 110.dp),
+                columns = GridCells.Fixed(photoColumns),
                 contentPadding = PaddingValues(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
