@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -76,15 +75,17 @@ class PdfViewModel(context: android.content.Context) : ViewModel() {
 @Composable
 fun PdfThumbnailView(
     pdfManager: PdfRendererManager,
-    uri: Uri,
+    pdf: MediaItem,
     modifier: Modifier = Modifier
 ) {
-    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(pdfManager.getCachedThumbnail(uri)) }
+    var bitmap by remember(pdf.uri, pdf.dateModified, pdf.size) {
+        mutableStateOf<Bitmap?>(pdfManager.getCachedThumbnail(pdf.uri, pdf.dateModified, pdf.size))
+    }
 
-    LaunchedEffect(uri) {
+    LaunchedEffect(pdf.uri, pdf.dateModified, pdf.size) {
         if (bitmap == null) {
             withContext(Dispatchers.IO) {
-                bitmap = pdfManager.renderThumbnail(uri)
+                bitmap = pdfManager.renderThumbnail(pdf.uri, pdf.dateModified, pdf.size)
             }
         }
     }
@@ -97,7 +98,7 @@ fun PdfThumbnailView(
         if (currentBitmap != null) {
             Image(
                 bitmap = currentBitmap.asImageBitmap(),
-                contentDescription = null,
+                contentDescription = pdf.displayName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
@@ -296,7 +297,7 @@ fun PdfGridCard(
             ) {
                 PdfThumbnailView(
                     pdfManager = pdfManager,
-                    uri = pdf.uri,
+                    pdf = pdf,
                     modifier = Modifier.fillMaxSize()
                 )
 
