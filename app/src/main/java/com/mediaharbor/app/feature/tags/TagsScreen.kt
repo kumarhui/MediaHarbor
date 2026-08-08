@@ -42,6 +42,7 @@ fun TagsScreen(onTagClick: (TagEntity) -> Unit) {
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var tagToEdit by remember { mutableStateOf<TagEntity?>(null) }
+    var tagToDelete by remember { mutableStateOf<TagEntity?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (tags.isEmpty()) {
@@ -89,11 +90,7 @@ fun TagsScreen(onTagClick: (TagEntity) -> Unit) {
                             IconButton(onClick = { tagToEdit = tag }) {
                                 Icon(Icons.Default.Edit, contentDescription = "Edit Tag")
                             }
-                            IconButton(onClick = {
-                                coroutineScope.launch {
-                                    app.database.tagDao().deleteTag(tag.id)
-                                }
-                            }) {
+                            IconButton(onClick = { tagToDelete = tag }) {
                                 Icon(
                                     Icons.Default.Delete,
                                     contentDescription = "Delete Tag",
@@ -142,6 +139,32 @@ fun TagsScreen(onTagClick: (TagEntity) -> Unit) {
                     app.database.tagDao().updateTag(tag.id, name, color)
                 }
                 tagToEdit = null
+            }
+        )
+    }
+
+    tagToDelete?.let { tag ->
+        AlertDialog(
+            onDismissRequest = { tagToDelete = null },
+            title = { Text("Delete Tag?") },
+            text = { Text("Are you sure you want to delete the '${tag.name}' tag?") },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        coroutineScope.launch {
+                            app.database.tagDao().deleteTag(tag.id)
+                        }
+                        tagToDelete = null
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { tagToDelete = null }) {
+                    Text("Cancel")
+                }
             }
         )
     }

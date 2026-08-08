@@ -1,11 +1,16 @@
 package com.mediaharbor.app
 
+import android.app.Activity
+import android.app.RecoverableSecurityException
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -33,6 +38,7 @@ import com.mediaharbor.app.feature.tags.TagCollectionScreen
 import com.mediaharbor.app.feature.tags.TagsScreen
 import com.mediaharbor.app.feature.sharing.ShareHelper
 import com.mediaharbor.app.navigation.Screen
+import kotlinx.coroutines.flow.combine
 
 class MainActivity : ComponentActivity() {
     private var lastBackPressTime = 0L
@@ -70,13 +76,15 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
     val selectionViewModel: SelectionViewModel = viewModel()
 
     var allMediaList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+
     LaunchedEffect(Unit) {
-        val photos = MediaStoreImageDataSource(context).fetchImages()
-        val pdfs = MediaStorePdfDataSource(context).fetchPdfs()
-        photos.collect { pList ->
-            pdfs.collect { dList ->
-                allMediaList = pList + dList
-            }
+        val photosFlow = MediaStoreImageDataSource(context).fetchImages()
+        val pdfsFlow = MediaStorePdfDataSource(context).fetchPdfs()
+
+        combine(photosFlow, pdfsFlow) { photos, pdfs ->
+            photos + pdfs
+        }.collect { combinedList ->
+            allMediaList = combinedList
         }
     }
 
@@ -90,29 +98,38 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
         }
     }
 
-    // Intercept back button when in selection mode
+    var pendingBatchDeleteItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+
+    val batchDeleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(context, "Deleted ${pendingBatchDeleteItems.size} items", Toast.LENGTH_SHORT).show()
+            selectionViewModel.clearSelection()
+        } else {
+            Toast.makeText(context, "Deletion cancelled", Toast.LENGTH_SHORT).show()
+        }
+        pendingBatchDeleteItems = emptyList()
+    }
+
     BackHandler(enabled = selectionViewModel.isSelectionMode) {
         selectionViewModel.clearSelection()
     }
 
-    // Intercept back button when image or PDF viewer is active
     BackHandler(enabled = !selectionViewModel.isSelectionMode && activeViewerMedia != null) {
         activeViewerMedia = null
     }
 
-    // Intercept back button when active tag collection is displayed
     BackHandler(enabled = !selectionViewModel.isSelectionMode && activeViewerMedia == null && activeTagCollection != null) {
         activeTagCollection = null
     }
 
-    // Double-back press to exit handler when at the root screen
     BackHandler(enabled = !selectionViewModel.isSelectionMode && activeViewerMedia == null && activeTagCollection == null) {
         onDoubleBackExit()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (activeTagCollection != null) {
-            // TagCollectionScreen manages its own Scaffold, TopAppBar, and Insets directly without double padding
             TagCollectionScreen(
                 tag = activeTagCollection!!,
                 allMediaItems = allMediaList,
@@ -134,8 +151,56 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
                                     }
                                 },
                                 onDeleteSelected = {
-                                    Toast.makeText(context, "Deleted ${selectionViewModel.selectedItems.size} items", Toast.LENGTH_SHORT).show()
-                                    selectionViewModel.clearSelection()
+                                    val itemsToDelete = selectionViewModel.selectedItems.toList()
+                                    if (itemsToDelete.isNotEmpty()) {
+                                        val uris = itemsToDelete.map { it.uri }
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                            try {
+                                                val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, uris)
+                                                pendingBatchDeleteItems = itemsToDelete
+                                                batchDeleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                                            } catch (e: Exception) {
+                                                var count = 0
+                                                itemsToDelete.forEach { item ->
+                                                    try {
+                                                        if (context.contentResolver.delete(item.uri, null, null) > 0) count++
+                                                    } catch (_: Exception) {}
+                                                }
+                                                Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
+                                                selectionViewModel.clearSelection()
+                                            }
+                                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                            try {
+                                                var count = 0
+                                                var firstEx: RecoverableSecurityException? = null
+                                                itemsToDelete.forEach { item ->
+                                                    try {
+                                                        if (context.contentResolver.delete(item.uri, null, null) > 0) count++
+                                                    } catch (e: RecoverableSecurityException) {
+                                                        if (firstEx == null) firstEx = e
+                                                    } catch (_: Exception) {}
+                                                }
+                                                if (firstEx != null) {
+                                                    pendingBatchDeleteItems = itemsToDelete
+                                                    batchDeleteLauncher.launch(IntentSenderRequest.Builder(firstEx!!.userAction.actionIntent.intentSender).build())
+                                                } else {
+                                                    Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
+                                                    selectionViewModel.clearSelection()
+                                                }
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Could not delete selected items", Toast.LENGTH_SHORT).show()
+                                            }
+                                        } else {
+                                            var count = 0
+                                            itemsToDelete.forEach { item ->
+                                                try {
+                                                    if (context.contentResolver.delete(item.uri, null, null) > 0) count++
+                                                } catch (_: Exception) {}
+                                            }
+                                            Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
+                                            selectionViewModel.clearSelection()
+                                        }
+                                    }
                                 }
                             )
                         } else {

@@ -1,10 +1,16 @@
 package com.mediaharbor.app.feature.pdfviewer
 
-import android.graphics.Bitmap
+import android.app.Activity
+import android.app.RecoverableSecurityException
 import android.content.ContentValues
+import android.graphics.Bitmap
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -39,8 +45,8 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
     var isUnlocked by remember { mutableStateOf(true) }
     var passwordInput by remember { mutableStateOf("") }
     var pageCount by remember { mutableIntStateOf(0) }
-    var showTagPicker by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(media.uri) {
         val count = pdfManager.getPageCount(media.uri)
@@ -49,6 +55,64 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
             isUnlocked = false
         } else {
             pageCount = count
+        }
+    }
+
+    var pendingDeleteMedia by remember { mutableStateOf<MediaItem?>(null) }
+
+    val deleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(context, "Document deleted", Toast.LENGTH_SHORT).show()
+            onDismiss()
+        } else {
+            Toast.makeText(context, "Deletion cancelled", Toast.LENGTH_SHORT).show()
+        }
+        pendingDeleteMedia = null
+    }
+
+    fun executeDelete(item: MediaItem) {
+        try {
+            val rows = context.contentResolver.delete(item.uri, null, null)
+            if (rows > 0) {
+                Toast.makeText(context, "Document deleted", Toast.LENGTH_SHORT).show()
+                onDismiss()
+                return
+            }
+        } catch (secEx: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(item.uri))
+                    pendingDeleteMedia = item
+                    deleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                    return
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
+                    return
+                }
+            }
+        } catch (e: RecoverableSecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                pendingDeleteMedia = item
+                deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
+                return
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(item.uri))
+                pendingDeleteMedia = item
+                deleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -96,6 +160,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.primary)
+                        .windowInsetsPadding(WindowInsets.statusBars)
                         .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -138,6 +203,13 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                                 }
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("Delete") },
+                            onClick = {
+                                overflowExpanded = false
+                                showDeleteDialog = true
+                            }
+                        )
                     }
                 }
 
@@ -161,7 +233,8 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color.Black.copy(alpha = 0.85f))
-                        .padding(vertical = 12.dp),
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -177,7 +250,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     IconButton(onClick = { showInfoDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
                     }
-                    IconButton(onClick = { Toast.makeText(context, "Delete triggered", Toast.LENGTH_SHORT).show() }) {
+                    IconButton(onClick = { showDeleteDialog = true }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
                     }
                 }
@@ -197,6 +270,30 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     }
                 },
                 confirmButton = { TextButton(onClick = { showInfoDialog = false }) { Text("OK") } }
+            )
+        }
+
+        if (showDeleteDialog) {
+            AlertDialog(
+                onDismissRequest = { showDeleteDialog = false },
+                title = { Text("Delete Document?") },
+                text = { Text("Are you sure you want to delete this document?") },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        onClick = {
+                            showDeleteDialog = false
+                            executeDelete(media)
+                        }
+                    ) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
             )
         }
     }
