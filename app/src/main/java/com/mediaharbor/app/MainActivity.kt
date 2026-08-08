@@ -5,6 +5,7 @@ import android.app.RecoverableSecurityException
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -86,6 +87,11 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
         }.collect { combinedList ->
             allMediaList = combinedList
         }
+    }
+
+    LaunchedEffect(allMediaList) {
+        val pdfCount = allMediaList.count { it.mediaType == MediaType.PDF }
+        Log.d("PDF_DEBUG", "MainActivity allMediaList updated, total items: ${allMediaList.size}, PDFs count: $pdfCount")
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(

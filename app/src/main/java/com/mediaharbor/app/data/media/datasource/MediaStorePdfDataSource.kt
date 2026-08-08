@@ -1,11 +1,18 @@
 package com.mediaharbor.app.data.media.datasource
 
+import android.Manifest
 import android.content.ContentUris
 import android.content.Context
+import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Log
+import androidx.core.content.ContextCompat
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.model.MediaType
 import kotlinx.coroutines.Dispatchers
@@ -13,37 +20,143 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import java.io.File
 
 class MediaStorePdfDataSource(private val context: Context) {
 
     fun fetchPdfs(): Flow<List<MediaItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
+                Log.d("PDF_DEBUG", "ContentObserver onChange triggered")
                 trySend(queryPdfs())
             }
         }
 
-        val collectionUri = MediaStore.Files.getContentUri("external")
+        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        } else {
+            MediaStore.Files.getContentUri("external")
+        }
+
         try {
             context.contentResolver.registerContentObserver(collectionUri, true, observer)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("PDF_DEBUG", "Failed to register content observer", e)
         }
 
-        // Emit initial query
+        // Emit initial scan
         trySend(queryPdfs())
 
         awaitClose {
             try {
                 context.contentResolver.unregisterContentObserver(observer)
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("PDF_DEBUG", "Failed to unregister content observer", e)
             }
         }
     }.flowOn(Dispatchers.IO)
 
     private fun queryPdfs(): List<MediaItem> {
+        val isExternalManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+
+        Log.d("PDF_DEBUG", "External storage manager = $isExternalManager")
+
+        // Primary: Device-wide recursive filesystem scan if MANAGE_EXTERNAL_STORAGE is granted
+        if (isExternalManager) {
+            val fsPdfs = scanFilesystemPdfs()
+            if (fsPdfs.isNotEmpty()) {
+                return fsPdfs
+            }
+        }
+
+        // Secondary / Fallback: MediaStore Query
+        return queryMediaStorePdfs()
+    }
+
+    private fun scanFilesystemPdfs(): List<MediaItem> {
+        Log.d("PDF_DEBUG", "Starting PDF filesystem scan")
+        Log.d("PDF_DEBUG", "External storage manager = ${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager() else true}")
+
         val list = mutableListOf<MediaItem>()
+        val rootDir = Environment.getExternalStorageDirectory()
+
+        fun walk(dir: File) {
+            val files = try {
+                dir.listFiles()
+            } catch (e: Exception) {
+                null
+            } ?: return
+
+            for (file in files) {
+                val name = file.name
+                if (file.isDirectory) {
+                    val normalizedName = name.lowercase()
+                    val path = file.absolutePath.lowercase()
+                    // Exclude internal, temporary, cache, recycle/trash, and application-private directories
+                    if (name.startsWith(".") ||
+                        normalizedName == "android" ||
+                        path.contains("/android/data") ||
+                        path.contains("/android/obb") ||
+                        path.contains(".recycle") ||
+                        path.contains(".trashed") ||
+                        normalizedName == "cache"
+                    ) {
+                        continue
+                    }
+                    walk(file)
+                } else if (file.isFile) {
+                    if (name.endsWith(".pdf", ignoreCase = true) && !name.startsWith(".")) {
+                        val path = file.absolutePath
+                        val size = file.length()
+                        val modified = file.lastModified()
+                        val uri = Uri.fromFile(file)
+
+                        Log.d("PDF_DEBUG", "PDF FOUND: path=$path size=$size modified=$modified")
+
+                        val relativePath = path.removePrefix(rootDir.absolutePath).removePrefix("/")
+                        val bucketName = file.parentFile?.name ?: ""
+
+                        list.add(
+                            MediaItem(
+                                id = path.hashCode().toLong(),
+                                uri = uri,
+                                displayName = name,
+                                mimeType = "application/pdf",
+                                size = size,
+                                dateAdded = modified / 1000,
+                                dateModified = modified / 1000,
+                                relativePath = relativePath,
+                                bucketId = bucketName,
+                                bucketDisplayName = bucketName,
+                                width = 0,
+                                height = 0,
+                                mediaType = MediaType.PDF
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (rootDir != null && rootDir.exists()) {
+            walk(rootDir)
+        }
+
+        Log.d("PDF_DEBUG", "PDF scan completed. Total PDFs found: ${list.size}")
+        return list
+    }
+
+    private fun queryMediaStorePdfs(): List<MediaItem> {
+        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        } else {
+            MediaStore.Files.getContentUri("external")
+        }
+
         val projection = arrayOf(
             MediaStore.Files.FileColumns._ID,
             MediaStore.Files.FileColumns.DISPLAY_NAME,
@@ -56,10 +169,21 @@ class MediaStorePdfDataSource(private val context: Context) {
             MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME
         )
 
-        val selection = "(${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?)"
-        val selectionArgs = arrayOf("application/pdf", "application/x-pdf", "%.pdf", "%.PDF")
+        val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ?"
+        val selectionArgs = arrayOf("application/pdf")
         val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
-        val collectionUri = MediaStore.Files.getContentUri("external")
+
+        val hasReadExternal = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        val hasReadImages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        Log.d("PDF_DEBUG", "Starting MediaStore PDF scan")
+        Log.d("PDF_DEBUG", "SDK = ${Build.VERSION.SDK_INT}")
+        Log.d("PDF_DEBUG", "Permission READ_EXTERNAL_STORAGE = $hasReadExternal, READ_MEDIA_IMAGES = $hasReadImages")
+        Log.d("PDF_DEBUG", "URI = $collectionUri")
+
+        val list = mutableListOf<MediaItem>()
 
         try {
             context.contentResolver.query(
@@ -69,6 +193,8 @@ class MediaStorePdfDataSource(private val context: Context) {
                 selectionArgs,
                 sortOrder
             )?.use { cursor ->
+                Log.d("PDF_DEBUG", "MediaStore PDF cursor count: ${cursor.count}")
+
                 val idCol = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID)
                 val nameCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME)
                 val mimeCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.MIME_TYPE)
@@ -91,10 +217,16 @@ class MediaStorePdfDataSource(private val context: Context) {
                         val bucketId = if (bIdCol != -1) cursor.getString(bIdCol) ?: "" else ""
                         val bucketName = if (bNameCol != -1) cursor.getString(bNameCol) ?: "" else ""
 
-                        list.add(
-                            MediaItem(
+                        val normalizedPath = relativePath.lowercase()
+                        val isTrashed = normalizedPath.contains(".recycle") || normalizedPath.contains(".trashed") || displayName.startsWith(".")
+
+                        if (!isTrashed) {
+                            val contentUri = ContentUris.withAppendedId(collectionUri, id)
+                            Log.d("PDF_DEBUG", "FOUND PDF: id=$id, name=$displayName, mime=$mimeType, path=$relativePath")
+
+                            val mediaItem = MediaItem(
                                 id = id,
-                                uri = ContentUris.withAppendedId(collectionUri, id),
+                                uri = contentUri,
                                 displayName = displayName,
                                 mimeType = mimeType,
                                 size = size,
@@ -107,13 +239,18 @@ class MediaStorePdfDataSource(private val context: Context) {
                                 height = 0,
                                 mediaType = MediaType.PDF
                             )
-                        )
+
+                            Log.d("PDF_DEBUG", "Mapped PDF MediaItem: id=${mediaItem.id} uri=${mediaItem.uri}")
+                            list.add(mediaItem)
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("PDF_DEBUG", "Error querying MediaStore for PDFs", e)
         }
+
+        Log.d("PDF_DEBUG", "MediaStore PDF scan completed. Total valid PDFs found: ${list.size}")
         return list
     }
 }

@@ -1,5 +1,12 @@
 package com.mediaharbor.app.feature.pdf
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -8,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.*
@@ -17,9 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import com.mediaharbor.app.core.common.FileUtils
+import com.mediaharbor.app.core.common.PermissionUtils
 import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
 import com.mediaharbor.app.data.repository.MediaRepositoryImpl
@@ -55,11 +65,79 @@ fun PdfScreen(
     val pdfs by viewModel.pdfsFlow.collectAsState(initial = emptyList())
     val filtered = remember(pdfs, searchQuery) { viewModel.filterPdfs(pdfs, searchQuery) }
 
-    if (filtered.isEmpty()) {
+    var hasPermission by remember { mutableStateOf(PermissionUtils.hasAllFilesPermission()) }
+
+    val settingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        hasPermission = PermissionUtils.hasAllFilesPermission()
+    }
+
+    LaunchedEffect(filtered.size) {
+        Log.d("PDF_DEBUG", "PDF tab count=${filtered.size}")
+    }
+
+    if (!hasPermission) {
+        // State 1: Permission not granted
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FolderSpecial,
+                    contentDescription = "File Access Permission",
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Allow file access to discover PDFs",
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "MediaHarbor requires broad file access to scan and display PDF documents stored across your device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            try {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                settingsLauncher.launch(intent)
+                            } catch (e: Exception) {
+                                val genericIntent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                settingsLauncher.launch(genericIntent)
+                            }
+                        } else {
+                            hasPermission = true
+                        }
+                    }
+                ) {
+                    Text("Grant Access")
+                }
+            }
+        }
+    } else if (filtered.isEmpty()) {
+        // State 2: Permission granted + no PDFs
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No PDF Documents Found", style = MaterialTheme.typography.bodyLarge)
+            Text("No PDF documents found", style = MaterialTheme.typography.bodyLarge)
         }
     } else {
+        // State 3: Permission granted + PDFs found
         LazyColumn(
             contentPadding = PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
