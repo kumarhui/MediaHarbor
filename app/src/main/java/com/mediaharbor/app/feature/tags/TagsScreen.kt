@@ -1,5 +1,13 @@
 package com.mediaharbor.app.feature.tags
 
+import android.app.Activity
+import android.os.Build
+import android.provider.MediaStore
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,19 +26,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mediaharbor.app.MediaHarborApp
 import com.mediaharbor.app.core.common.FileUtils
+import com.mediaharbor.app.core.pdf.PdfRendererManager
 import com.mediaharbor.app.data.local.entity.TagEntity
+import com.mediaharbor.app.data.settings.SettingsManager
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.model.MediaType
+import com.mediaharbor.app.feature.gallery.PhotoTile
+import com.mediaharbor.app.feature.pdf.PdfGridCard
 import com.mediaharbor.app.feature.selection.DragSelectContainer
+import com.mediaharbor.app.feature.selection.SelectionTopBar
 import com.mediaharbor.app.feature.selection.SelectionViewModel
+import com.mediaharbor.app.feature.sharing.ShareHelper
 import kotlinx.coroutines.launch
 
 private data class TagStats(
@@ -86,16 +99,16 @@ fun TagsScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 80.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                contentPadding = PaddingValues(top = 12.dp, start = 12.dp, end = 12.dp, bottom = 80.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(tags, key = { it.id }) { tag ->
                     val stats = tagStatsMap[tag.id] ?: TagStats()
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(140.dp)
+                            .height(110.dp)
                             .combinedClickable(
                                 onClick = { onTagClick(tag) },
                                 onLongClick = { contextMenuTag = tag }
@@ -104,7 +117,7 @@ fun TagsScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(12.dp),
+                                .padding(10.dp),
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             // Header: Color dot + Tag Name
@@ -114,7 +127,7 @@ fun TagsScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(14.dp)
+                                        .size(12.dp)
                                         .clip(CircleShape)
                                         .background(
                                             try { Color(android.graphics.Color.parseColor(tag.colorHex)) }
@@ -132,7 +145,7 @@ fun TagsScreen(
                                 )
                             }
 
-                            // Bottom: Statistics
+                            // Bottom Section: File Statistics
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 if (stats.fileCount > 0) {
                                     Text(
@@ -278,20 +291,29 @@ fun TagsScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TagCollectionScreen(
     tag: TagEntity,
     allMediaItems: List<MediaItem>,
     onBack: () -> Unit,
     onMediaClick: (MediaItem) -> Unit,
-    selectionViewModel: SelectionViewModel = remember { SelectionViewModel() }
+    selectionViewModel: SelectionViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    val app = context.applicationContext as MediaHarborApp
-    val assignedUris by app.database.tagDao().getMediaUrisForTag(tag.id).collectAsState(initial = emptyList())
-    val gridState = rememberLazyGridState()
+    val app = context.applicationContext as? MediaHarborApp
+    val settingsManager = remember { SettingsManager.getInstance(context) }
+    val photoColumns by settingsManager.photoColumns.collectAsState()
+    val pdfManager = remember { PdfRendererManager(context) }
 
+    val assignedUris by (app?.database?.tagDao()?.getMediaUrisForTag(tag.id)?.collectAsState(initial = emptyList())
+        ?: remember { mutableStateOf(emptyList()) })
+
+    val tagCountsList by (app?.database?.tagDao()?.getMediaTagCounts()?.collectAsState(initial = emptyList())
+        ?: remember { mutableStateOf(emptyList()) })
+    val tagCountMap = remember(tagCountsList) { tagCountsList.associate { it.mediaUri to it.count } }
+
+    val gridState = rememberLazyGridState()
     var selectedFilter by remember { mutableStateOf("All") }
 
     val filteredMedia = remember(assignedUris, allMediaItems, selectedFilter) {
@@ -303,16 +325,76 @@ fun TagCollectionScreen(
         }
     }
 
+    // Delete launcher for batch delete action
+    var pendingBatchDeleteItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    val batchDeleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(context, "Deleted ${pendingBatchDeleteItems.size} items", Toast.LENGTH_SHORT).show()
+            selectionViewModel.clearSelection()
+        } else {
+            Toast.makeText(context, "Deletion cancelled", Toast.LENGTH_SHORT).show()
+        }
+        pendingBatchDeleteItems = emptyList()
+    }
+
+    BackHandler(enabled = selectionViewModel.isSelectionMode) {
+        selectionViewModel.clearSelection()
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("${tag.name} (${filteredMedia.size})") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+            if (selectionViewModel.isSelectionMode) {
+                SelectionTopBar(
+                    selectionViewModel = selectionViewModel,
+                    totalAvailableItems = filteredMedia,
+                    onShareSelected = {
+                        ShareHelper.shareMultiple(context, selectionViewModel.selectedItems)
+                    },
+                    onDeleteSelected = {
+                        val itemsToDelete = selectionViewModel.selectedItems.toList()
+                        if (itemsToDelete.isNotEmpty()) {
+                            val uris = itemsToDelete.map { it.uri }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                try {
+                                    val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, uris)
+                                    pendingBatchDeleteItems = itemsToDelete
+                                    batchDeleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                                } catch (e: Exception) {
+                                    var count = 0
+                                    itemsToDelete.forEach { item ->
+                                        try {
+                                            if (context.contentResolver.delete(item.uri, null, null) > 0) count++
+                                        } catch (_: Exception) {}
+                                    }
+                                    Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
+                                    selectionViewModel.clearSelection()
+                                }
+                            } else {
+                                var count = 0
+                                itemsToDelete.forEach { item ->
+                                    try {
+                                        if (context.contentResolver.delete(item.uri, null, null) > 0) count++
+                                    } catch (_: Exception) {}
+                                }
+                                Toast.makeText(context, "Deleted $count items", Toast.LENGTH_SHORT).show()
+                                selectionViewModel.clearSelection()
+                            }
+                        }
                     }
-                }
-            )
+                )
+            } else {
+                TopAppBar(
+                    modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+                    title = { Text("${tag.name} (${filteredMedia.size})") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                )
+            }
         }
     ) { innerPadding ->
         Column(
@@ -351,64 +433,59 @@ fun TagCollectionScreen(
                 ) {
                     LazyVerticalGrid(
                         state = gridState,
-                        columns = GridCells.Adaptive(minSize = 110.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        columns = GridCells.Fixed(photoColumns),
+                        contentPadding = PaddingValues(top = 4.dp, start = 4.dp, end = 4.dp, bottom = 80.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(filteredMedia, key = { it.id }) { item ->
                             val isSelected = selectionViewModel.isSelected(item)
-                            Card(
-                                modifier = Modifier
-                                    .aspectRatio(1f)
-                                    .clickable {
+                            val tagCount = tagCountMap[item.uri.toString()] ?: 0
+
+                            if (item.mediaType == MediaType.IMAGE) {
+                                PhotoTile(
+                                    item = item,
+                                    isSelectionMode = selectionViewModel.isSelectionMode,
+                                    isSelected = isSelected,
+                                    tagCount = tagCount,
+                                    onClick = {
                                         if (selectionViewModel.isSelectionMode) {
                                             selectionViewModel.toggleSelection(item)
                                         } else {
                                             onMediaClick(item)
                                         }
-                                    }
-                            ) {
-                                Box(modifier = Modifier.fillMaxSize()) {
-                                    if (item.mediaType == MediaType.IMAGE) {
-                                        AsyncImage(
-                                            model = item.uri,
-                                            contentDescription = item.displayName,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Box(
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Default.PictureAsPdf,
-                                                contentDescription = "PDF",
-                                                tint = MaterialTheme.colorScheme.error,
-                                                modifier = Modifier.size(48.dp)
-                                            )
+                                    },
+                                    onLongClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.selectRange(item, filteredMedia)
+                                        } else {
+                                            selectionViewModel.startSelection(item)
                                         }
                                     }
-
-                                    if (selectionViewModel.isSelectionMode) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
-                                        )
-                                        Icon(
-                                            imageVector = Icons.Default.CheckCircle,
-                                            contentDescription = "Selected",
-                                            tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(6.dp)
-                                                .size(24.dp)
-                                        )
+                                )
+                            } else {
+                                PdfGridCard(
+                                    pdf = item,
+                                    pdfManager = pdfManager,
+                                    isSelectionMode = selectionViewModel.isSelectionMode,
+                                    isSelected = isSelected,
+                                    tagCount = tagCount,
+                                    onClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.toggleSelection(item)
+                                        } else {
+                                            onMediaClick(item)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.selectRange(item, filteredMedia)
+                                        } else {
+                                            selectionViewModel.startSelection(item)
+                                        }
                                     }
-                                }
+                                )
                             }
                         }
                     }
