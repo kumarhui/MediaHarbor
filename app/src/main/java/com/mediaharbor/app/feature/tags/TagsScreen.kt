@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mediaharbor.app.MediaHarborApp
+import com.mediaharbor.app.core.common.FileUtils
 import com.mediaharbor.app.data.local.entity.TagEntity
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.model.MediaType
@@ -30,15 +31,39 @@ import com.mediaharbor.app.feature.selection.DragSelectContainer
 import com.mediaharbor.app.feature.selection.SelectionViewModel
 import kotlinx.coroutines.launch
 
+private data class TagStats(
+    val fileCount: Int = 0,
+    val totalSize: Long = 0L,
+    val photoCount: Int = 0,
+    val pdfCount: Int = 0
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TagsScreen(onTagClick: (TagEntity) -> Unit) {
+fun TagsScreen(
+    allMediaItems: List<MediaItem>,
+    onTagClick: (TagEntity) -> Unit
+) {
     val context = LocalContext.current
     val app = context.applicationContext as MediaHarborApp
     val coroutineScope = rememberCoroutineScope()
     val rawTags by app.database.tagDao().getAllTags().collectAsState(initial = emptyList())
+    val allCrossRefs by app.database.tagDao().getAllCrossRefs().collectAsState(initial = emptyList())
 
     val tags = remember(rawTags) { rawTags.distinctBy { it.name } }
+
+    val tagStatsMap = remember(tags, allCrossRefs, allMediaItems) {
+        val mediaByUri = allMediaItems.associateBy { it.uri.toString() }
+        tags.associate { tag ->
+            val matchedUris = allCrossRefs.filter { it.tagId == tag.id }.map { it.mediaUri }.toSet()
+            val matchedItems = matchedUris.mapNotNull { mediaByUri[it] }
+            val fileCount = matchedItems.size
+            val totalSize = matchedItems.sumOf { it.size }
+            val photoCount = matchedItems.count { it.mediaType == MediaType.IMAGE }
+            val pdfCount = matchedItems.count { it.mediaType == MediaType.PDF }
+            tag.id to TagStats(fileCount, totalSize, photoCount, pdfCount)
+        }
+    }
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var tagToEdit by remember { mutableStateOf<TagEntity?>(null) }
@@ -61,40 +86,62 @@ fun TagsScreen(onTagClick: (TagEntity) -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(tags, key = { it.id }) { tag ->
+                    val stats = tagStatsMap[tag.id] ?: TagStats()
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onTagClick(tag) }
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        try { Color(android.graphics.Color.parseColor(tag.colorHex)) }
-                                        catch (e: Exception) { Color.Gray }
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            try { Color(android.graphics.Color.parseColor(tag.colorHex)) }
+                                            catch (e: Exception) { Color.Gray }
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text(
+                                    tag.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { tagToEdit = tag }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit Tag")
+                                }
+                                IconButton(onClick = { tagToDelete = tag }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete Tag",
+                                        tint = MaterialTheme.colorScheme.error
                                     )
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Text(
-                                tag.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = { tagToEdit = tag }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit Tag")
+                                }
                             }
-                            IconButton(onClick = { tagToDelete = tag }) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Delete Tag",
-                                    tint = MaterialTheme.colorScheme.error
+
+                            Spacer(modifier = Modifier.height(4.dp))
+                            if (stats.fileCount > 0) {
+                                Text(
+                                    text = "${stats.fileCount} file${if (stats.fileCount > 1) "s" else ""} • ${FileUtils.formatFileSize(stats.totalSize)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "${stats.photoCount} photo${if (stats.photoCount != 1) "s" else ""} · ${stats.pdfCount} PDF${if (stats.pdfCount != 1) "s" else ""}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            } else {
+                                Text(
+                                    text = "No tagged files",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
                                 )
                             }
                         }

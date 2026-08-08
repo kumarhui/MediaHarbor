@@ -16,9 +16,21 @@ import kotlinx.coroutines.flow.flowOn
 
 class MediaStoreImageDataSource(private val context: Context) {
 
-    fun fetchImages(): Flow<List<MediaItem>> = callbackFlow {
+    companion object {
+        @Volatile
+        private var cachedImages: List<MediaItem>? = null
+
+        fun getCachedImages(): List<MediaItem>? = cachedImages
+
+        fun invalidateCache() {
+            cachedImages = null
+        }
+    }
+
+    fun fetchImages(forceRefresh: Boolean = false): Flow<List<MediaItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
+                cachedImages = null
                 trySend(queryImages())
             }
         }
@@ -33,8 +45,11 @@ class MediaStoreImageDataSource(private val context: Context) {
             e.printStackTrace()
         }
 
-        // Emit initial query
-        trySend(queryImages())
+        if (cachedImages != null && !forceRefresh) {
+            trySend(cachedImages!!)
+        } else {
+            trySend(queryImages())
+        }
 
         awaitClose {
             try {
@@ -109,6 +124,7 @@ class MediaStoreImageDataSource(private val context: Context) {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        cachedImages = list
         return list
     }
 }

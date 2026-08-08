@@ -37,9 +37,7 @@ import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.GetPdfsUseCase
 import com.mediaharbor.app.domain.usecase.SearchMediaUseCase
 import com.mediaharbor.app.feature.selection.SelectionViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 class PdfViewModel(context: android.content.Context) : ViewModel() {
     private val pdfDataSource = MediaStorePdfDataSource(context)
@@ -51,7 +49,7 @@ class PdfViewModel(context: android.content.Context) : ViewModel() {
     private val searchUseCase = SearchMediaUseCase()
 
     val pdfsFlow = getPdfsUseCase()
-    val isScanning: StateFlow<Boolean> = pdfDataSource.isScanning
+    val isScanning: StateFlow<Boolean> = MediaStorePdfDataSource.isScanning
 
     fun filterPdfs(pdfs: List<MediaItem>, query: String): List<MediaItem> {
         return searchUseCase(pdfs, query)
@@ -67,10 +65,13 @@ fun PdfScreen(
 ) {
     val context = LocalContext.current
     val viewModel = remember { PdfViewModel(context) }
-    val pdfs by viewModel.pdfsFlow.collectAsState(initial = emptyList())
+    val initialPdfs = remember { MediaStorePdfDataSource.getCachedPdfs() ?: emptyList() }
+    val pdfs by viewModel.pdfsFlow.collectAsState(initial = initialPdfs)
     val isScanning by viewModel.isScanning.collectAsState()
 
-    var isInitialLoading by remember { mutableStateOf(true) }
+    var isInitialLoading by remember {
+        mutableStateOf(MediaStorePdfDataSource.getCachedPdfs() == null && (isScanning || pdfs.isEmpty()))
+    }
     val filtered = remember(pdfs, searchQuery) { viewModel.filterPdfs(pdfs, searchQuery) }
 
     LaunchedEffect(pdfs, isScanning) {
@@ -146,7 +147,7 @@ fun PdfScreen(
             }
         }
     } else if (isInitialLoading && filtered.isEmpty()) {
-        // State 2: Active loading
+        // State 2: Active initial loading
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -158,7 +159,7 @@ fun PdfScreen(
             }
         }
     } else if (filtered.isEmpty()) {
-        // State 3: Permission granted + scan complete + no PDFs
+        // State 3: Permission granted + scan complete + no PDFs found
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No PDF documents found", style = MaterialTheme.typography.bodyLarge)
         }

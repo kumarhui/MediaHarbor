@@ -38,6 +38,9 @@ interface TagDao {
     @Query("SELECT mediaUri FROM media_tag_cross_ref WHERE tagId = :tagId")
     fun getMediaUrisForTag(tagId: Long): Flow<List<String>>
 
+    @Query("SELECT * FROM media_tag_cross_ref")
+    fun getAllCrossRefs(): Flow<List<MediaTagCrossRef>>
+
     @Query("DELETE FROM tags WHERE id NOT IN (SELECT MIN(id) FROM tags GROUP BY name)")
     suspend fun removeDuplicateTags()
 }

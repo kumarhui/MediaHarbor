@@ -264,7 +264,10 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
                             selectionViewModel = selectionViewModel,
                             onMediaClick = { activeViewerMedia = it }
                         )
-                        Screen.Tags -> TagsScreen { tag -> activeTagCollection = tag }
+                        Screen.Tags -> TagsScreen(
+                            allMediaItems = allMediaList,
+                            onTagClick = { tag -> activeTagCollection = tag }
+                        )
                         Screen.Settings -> SettingsScreen()
                     }
                 }

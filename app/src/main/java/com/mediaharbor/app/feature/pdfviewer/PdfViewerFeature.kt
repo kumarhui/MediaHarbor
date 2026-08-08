@@ -328,7 +328,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                             }
                         }
 
-                        // Horizontal Reading Progress Bar immediately below Top Bar
+                        // Horizontal Reading Progress Bar
                         if (pageCount > 0) {
                             val readingProgress = (currentPage.toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
                             LinearProgressIndicator(
@@ -374,12 +374,10 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                                             event.changes.forEach { it.consume() }
                                         } else if (docScale > 1.05f && panChange != Offset.Zero) {
                                             val maxPanX = (docScale - 1f) * 500f
-                                            // Handle horizontal panning for zoomed content while letting vertical gestures scroll the LazyColumn
                                             panOffset = Offset(
                                                 x = (panOffset.x + panChange.x).coerceIn(-maxPanX, maxPanX),
                                                 y = 0f
                                             )
-                                            // Only consume horizontal pan gestures so vertical drags smoothly navigate pages
                                             if (abs(panChange.x) > abs(panChange.y)) {
                                                 event.changes.forEach { it.consume() }
                                             }
@@ -390,7 +388,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     ) {
                         LazyColumn(
                             state = listState,
-                            userScrollEnabled = true, // Always allow vertical document scrolling across pages
+                            userScrollEnabled = true,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
@@ -410,6 +408,39 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                                     pageIndex = index,
                                     onTap = { isChromeVisible = !isChromeVisible }
                                 )
+                            }
+                        }
+
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isChromeVisible,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .windowInsetsPadding(WindowInsets.systemBars)
+                                .padding(end = 16.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                FloatingActionButton(
+                                    onClick = { docScale = (docScale + 0.5f).coerceAtMost(5f) },
+                                    containerColor = Color.Black.copy(alpha = 0.6f),
+                                    contentColor = Color.White,
+                                    modifier = Modifier.size(44.dp)
+                                ) {
+                                    Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In")
+                                }
+
+                                FloatingActionButton(
+                                    onClick = {
+                                        docScale = (docScale - 0.5f).coerceAtLeast(1f)
+                                        if (docScale == 1f) panOffset = Offset.Zero
+                                    },
+                                    containerColor = Color.Black.copy(alpha = 0.6f),
+                                    contentColor = Color.White,
+                                    modifier = Modifier.size(44.dp)
+                                ) {
+                                    Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out")
+                                }
                             }
                         }
                     }
@@ -433,23 +464,6 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = {
-                                docScale = (docScale - 0.5f).coerceAtLeast(1f)
-                                if (docScale == 1f) panOffset = Offset.Zero
-                            }
-                        ) {
-                            Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", tint = Color.White)
-                        }
-
-                        IconButton(
-                            onClick = {
-                                docScale = (docScale + 0.5f).coerceAtMost(5f)
-                            }
-                        ) {
-                            Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", tint = Color.White)
-                        }
-
                         IconButton(
                             enabled = currentPage > 1,
                             onClick = {

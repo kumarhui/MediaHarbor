@@ -1,9 +1,7 @@
 package com.mediaharbor.app.data.media.datasource
 
-import android.Manifest
 import android.content.ContentUris
 import android.content.Context
-import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
 import android.os.Build
@@ -12,7 +10,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.model.MediaType
 import kotlinx.coroutines.Dispatchers
@@ -23,15 +20,22 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.withContext
 import java.io.File
 
 class MediaStorePdfDataSource(private val context: Context) {
 
-    private val _isScanning = MutableStateFlow(false)
-    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+    companion object {
+        @Volatile
+        private var cachedPdfs: List<MediaItem>? = null
+        private val _isScanning = MutableStateFlow(false)
+        val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
-    private var cachedPdfs: List<MediaItem>? = null
+        fun getCachedPdfs(): List<MediaItem>? = cachedPdfs
+
+        fun invalidateCache() {
+            cachedPdfs = null
+        }
+    }
 
     fun fetchPdfs(forceRefresh: Boolean = false): Flow<List<MediaItem>> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {

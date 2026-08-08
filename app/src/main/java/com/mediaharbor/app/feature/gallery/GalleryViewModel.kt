@@ -56,11 +56,26 @@ fun GalleryScreen(
 ) {
     val context = LocalContext.current
     val viewModel = remember { GalleryViewModel(context) }
-    val photos by viewModel.photosFlow.collectAsState(initial = emptyList())
+    val initialPhotos = remember { MediaStoreImageDataSource.getCachedImages() ?: emptyList() }
+    val photos by viewModel.photosFlow.collectAsState(initial = initialPhotos)
     val filtered = remember(photos, searchQuery) { viewModel.filterPhotos(photos, searchQuery) }
     val gridState = rememberLazyGridState()
 
-    if (filtered.isEmpty()) {
+    var isInitialLoading by remember {
+        mutableStateOf(MediaStoreImageDataSource.getCachedImages() == null && photos.isEmpty())
+    }
+
+    LaunchedEffect(photos) {
+        if (photos.isNotEmpty() || MediaStoreImageDataSource.getCachedImages() != null) {
+            isInitialLoading = false
+        }
+    }
+
+    if (isInitialLoading && filtered.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+    } else if (filtered.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No Photos Found", style = MaterialTheme.typography.bodyLarge)
         }

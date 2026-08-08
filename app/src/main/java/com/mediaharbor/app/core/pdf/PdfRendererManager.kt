@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -29,13 +30,24 @@ class PdfSession(
 
 class PdfRendererManager(private val context: Context) {
 
-    // Bounded LRU Bitmap Cache (up to 25% of app memory or 64MB)
+    // Memory allocation tuned to 30% of available heap (min 32MB, max 128MB)
     private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
-    private val cacheSize = (maxMemory / 4).coerceIn(16384, 65536) // KB
+    private val cacheSize = (maxMemory / 3).coerceIn(32768, 131072) // KB
 
     private val pageCache = object : LruCache<String, Bitmap>(cacheSize) {
         override fun sizeOf(key: String, bitmap: Bitmap): Int {
             return bitmap.byteCount / 1024
+        }
+
+        override fun entryRemoved(
+            evicted: Boolean,
+            key: String,
+            oldValue: Bitmap,
+            newValue: Bitmap?
+        ) {
+            if (evicted) {
+                Log.d("PDF_CACHE", "EVICT page key=$key")
+            }
         }
     }
 
@@ -65,17 +77,27 @@ class PdfRendererManager(private val context: Context) {
 
     fun getCachedPage(pdfUri: Uri, pageIndex: Int): Bitmap? {
         val cacheKey = "${pdfUri}_$pageIndex"
-        return pageCache.get(cacheKey)
+        Log.d("PDF_CACHE", "Page $pageIndex requested")
+        val cached = pageCache.get(cacheKey)
+        if (cached != null) {
+            Log.d("PDF_CACHE", "CACHE HIT page=$pageIndex")
+        } else {
+            Log.d("PDF_CACHE", "CACHE MISS page=$pageIndex")
+        }
+        return cached
     }
 
     suspend fun renderPage(
         session: PdfSession,
         pdfUri: Uri,
         pageIndex: Int,
-        renderScale: Float = 2.0f
+        renderScale: Float = 1.35f
     ): Bitmap? = withContext(Dispatchers.IO) {
         val cacheKey = "${pdfUri}_$pageIndex"
-        pageCache.get(cacheKey)?.let { return@withContext it }
+        pageCache.get(cacheKey)?.let {
+            Log.d("PDF_CACHE", "CACHE HIT page=$pageIndex")
+            return@withContext it
+        }
 
         if (session.isClosed) return@withContext null
 
@@ -83,6 +105,8 @@ class PdfRendererManager(private val context: Context) {
             if (session.isClosed) return@withContext null
             try {
                 if (pageIndex < 0 || pageIndex >= session.renderer.pageCount) return@withContext null
+
+                Log.d("PDF_CACHE", "RENDER START page=$pageIndex")
                 val page = session.renderer.openPage(pageIndex)
                 val width = (page.width * renderScale).toInt().coerceAtLeast(1)
                 val height = (page.height * renderScale).toInt().coerceAtLeast(1)
@@ -91,6 +115,7 @@ class PdfRendererManager(private val context: Context) {
                 page.close()
 
                 pageCache.put(cacheKey, bitmap)
+                Log.d("PDF_CACHE", "RENDER COMPLETE page=$pageIndex")
                 bitmap
             } catch (e: Exception) {
                 null
