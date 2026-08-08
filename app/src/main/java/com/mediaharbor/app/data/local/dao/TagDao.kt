@@ -9,6 +9,11 @@ import com.mediaharbor.app.data.local.entity.PdfReadingStateEntity
 import com.mediaharbor.app.data.local.entity.TagEntity
 import kotlinx.coroutines.flow.Flow
 
+data class MediaTagCount(
+    val mediaUri: String,
+    val count: Int
+)
+
 @Dao
 interface TagDao {
     @Query("SELECT * FROM tags ORDER BY name ASC")
@@ -40,6 +45,9 @@ interface TagDao {
 
     @Query("SELECT * FROM media_tag_cross_ref")
     fun getAllCrossRefs(): Flow<List<MediaTagCrossRef>>
+
+    @Query("SELECT mediaUri, COUNT(DISTINCT tagId) as count FROM media_tag_cross_ref GROUP BY mediaUri")
+    fun getMediaTagCounts(): Flow<List<MediaTagCount>>
 
     @Query("DELETE FROM tags WHERE id NOT IN (SELECT MIN(id) FROM tags GROUP BY name)")
     suspend fun removeDuplicateTags()

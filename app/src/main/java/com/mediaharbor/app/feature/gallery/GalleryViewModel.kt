@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,9 +22,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import coil3.compose.AsyncImage
+import com.mediaharbor.app.MediaHarborApp
 import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
 import com.mediaharbor.app.data.repository.MediaRepositoryImpl
@@ -55,11 +58,16 @@ fun GalleryScreen(
     onMediaClick: (MediaItem) -> Unit
 ) {
     val context = LocalContext.current
+    val app = context.applicationContext as? MediaHarborApp
     val viewModel = remember { GalleryViewModel(context) }
     val initialPhotos = remember { MediaStoreImageDataSource.getCachedImages() ?: emptyList() }
     val photos by viewModel.photosFlow.collectAsState(initial = initialPhotos)
     val filtered = remember(photos, searchQuery) { viewModel.filterPhotos(photos, searchQuery) }
     val gridState = rememberLazyGridState()
+
+    val tagCountsList by (app?.database?.tagDao()?.getMediaTagCounts()?.collectAsState(initial = emptyList())
+        ?: remember { mutableStateOf(emptyList()) })
+    val tagCountMap = remember(tagCountsList) { tagCountsList.associate { it.mediaUri to it.count } }
 
     var isInitialLoading by remember {
         mutableStateOf(MediaStoreImageDataSource.getCachedImages() == null && photos.isEmpty())
@@ -96,10 +104,13 @@ fun GalleryScreen(
             ) {
                 items(filtered, key = { it.id }) { item ->
                     val isSelected = selectionViewModel.isSelected(item)
+                    val tagCount = tagCountMap[item.uri.toString()] ?: 0
+
                     PhotoTile(
                         item = item,
                         isSelectionMode = selectionViewModel.isSelectionMode,
                         isSelected = isSelected,
+                        tagCount = tagCount,
                         onClick = {
                             if (selectionViewModel.isSelectionMode) {
                                 selectionViewModel.toggleSelection(item)
@@ -123,6 +134,7 @@ fun PhotoTile(
     item: MediaItem,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    tagCount: Int = 0,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -141,6 +153,36 @@ fun PhotoTile(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
+
+        if (tagCount > 0) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                tonalElevation = 2.dp,
+                shadowElevation = 2.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Label,
+                        contentDescription = "Tags",
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(
+                        text = "$tagCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
 
         if (isSelectionMode) {
             Box(
