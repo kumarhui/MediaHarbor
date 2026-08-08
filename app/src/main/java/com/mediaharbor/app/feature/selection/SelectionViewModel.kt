@@ -1,15 +1,13 @@
 package com.mediaharbor.app.feature.selection
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -61,38 +59,99 @@ fun SelectionTopBar(
     onShareSelected: () -> Unit,
     onDeleteSelected: () -> Unit
 ) {
-    TopAppBar(
-        title = {
-            Text("${selectionViewModel.selectedItems.size} Selected")
-        },
-        navigationIcon = {
-            IconButton(onClick = { selectionViewModel.clearSelection() }) {
-                Icon(Icons.Default.Close, contentDescription = "Close Selection")
-            }
-        },
-        actions = {
-            IconButton(onClick = {
-                if (selectionViewModel.selectedItems.size == totalAvailableItems.size) {
-                    selectionViewModel.clearSelection()
-                } else {
-                    selectionViewModel.selectAll(totalAvailableItems)
+    val selectedCount = selectionViewModel.selectedItems.size
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.statusBars),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        tonalElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                modifier = Modifier.size(40.dp)
+            ) {
+                IconButton(onClick = { selectionViewModel.clearSelection() }) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Cancel Selection",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
                 }
-            }) {
-                Icon(
-                    if (selectionViewModel.selectedItems.size == totalAvailableItems.size) Icons.Default.Deselect else Icons.Default.SelectAll,
-                    contentDescription = "Select All"
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            AnimatedContent(
+                targetState = selectedCount,
+                transitionSpec = {
+                    if (targetState > initialState) {
+                        slideInVertically { height -> height } + fadeIn() togetherWith
+                                slideOutVertically { height -> -height } + fadeOut()
+                    } else {
+                        slideInVertically { height -> -height } + fadeIn() togetherWith
+                                slideOutVertically { height -> height } + fadeOut()
+                    }
+                },
+                modifier = Modifier.weight(1f),
+                label = "selection_count_anim"
+            ) { count ->
+                Text(
+                    text = if (count == 1) "1 item selected" else "$count items selected",
+                    style = MaterialTheme.typography.titleMedium
                 )
             }
-            IconButton(onClick = onShareSelected) {
-                Icon(Icons.Default.Share, contentDescription = "Share Selected")
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                IconButton(onClick = {
+                    if (selectedCount == totalAvailableItems.size) {
+                        selectionViewModel.clearSelection()
+                    } else {
+                        selectionViewModel.selectAll(totalAvailableItems)
+                    }
+                }) {
+                    Icon(
+                        imageVector = if (selectedCount == totalAvailableItems.size)
+                            Icons.Default.Deselect
+                        else
+                            Icons.Default.SelectAll,
+                        contentDescription = "Select All"
+                    )
+                }
+
+                IconButton(
+                    onClick = onShareSelected,
+                    enabled = selectedCount > 0
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "Share Selected"
+                    )
+                }
+
+                IconButton(
+                    onClick = onDeleteSelected,
+                    enabled = selectedCount > 0
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete Selected",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
             }
-            IconButton(onClick = onDeleteSelected) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = MaterialTheme.colorScheme.error)
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-        )
-    )
+        }
+    }
 }
