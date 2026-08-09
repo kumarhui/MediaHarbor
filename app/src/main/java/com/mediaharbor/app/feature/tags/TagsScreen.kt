@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -26,13 +27,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.compose.AsyncImage
 import com.mediaharbor.app.MediaHarborApp
-import com.mediaharbor.app.core.common.FileUtils
 import com.mediaharbor.app.core.pdf.PdfRendererManager
 import com.mediaharbor.app.data.local.entity.TagEntity
 import com.mediaharbor.app.data.settings.SettingsManager
@@ -40,6 +42,7 @@ import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.model.MediaType
 import com.mediaharbor.app.feature.gallery.PhotoTile
 import com.mediaharbor.app.feature.pdf.PdfGridCard
+import com.mediaharbor.app.feature.pdf.PdfThumbnailView
 import com.mediaharbor.app.feature.selection.DragSelectContainer
 import com.mediaharbor.app.feature.selection.SelectionTopBar
 import com.mediaharbor.app.feature.selection.SelectionViewModel
@@ -50,8 +53,75 @@ private data class TagStats(
     val fileCount: Int = 0,
     val totalSize: Long = 0L,
     val photoCount: Int = 0,
-    val pdfCount: Int = 0
+    val pdfCount: Int = 0,
+    val representativeMedia: MediaItem? = null
 )
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CreateEditTagDialog(
+    title: String,
+    initialName: String,
+    initialColor: String,
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, color: String) -> Unit
+) {
+    var tagName by remember { mutableStateOf(initialName) }
+    var tagColor by remember { mutableStateOf(initialColor) }
+
+    val presetColors = listOf(
+        "#FF5722", "#3F51B5", "#4CAF50", "#009688",
+        "#9C27B0", "#FF9800", "#607D8B", "#E91E63",
+        "#F44336", "#8BC34A", "#00BCD4", "#673AB7", "#D32F2F"
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = tagName,
+                    onValueChange = { tagName = it },
+                    label = { Text("Tag Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text("Select Color", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    presetColors.take(6).forEach { colorHex ->
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    try { Color(android.graphics.Color.parseColor(colorHex)) }
+                                    catch (e: Exception) { Color.Gray }
+                                )
+                                .clickable { tagColor = colorHex }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = tagName.isNotBlank(),
+                onClick = { onConfirm(tagName.trim(), tagColor) }
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -61,7 +131,11 @@ fun TagsScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as MediaHarborApp
+    val settingsManager = remember { SettingsManager.getInstance(context) }
+    val tagColumns by settingsManager.tagColumns.collectAsState()
+    val pdfManager = remember { PdfRendererManager(context) }
     val coroutineScope = rememberCoroutineScope()
+
     val rawTags by app.database.tagDao().getAllTags().collectAsState(initial = emptyList())
     val allCrossRefs by app.database.tagDao().getAllCrossRefs().collectAsState(initial = emptyList())
 
@@ -76,7 +150,9 @@ fun TagsScreen(
             val totalSize = matchedItems.sumOf { it.size }
             val photoCount = matchedItems.count { it.mediaType == MediaType.IMAGE }
             val pdfCount = matchedItems.count { it.mediaType == MediaType.PDF }
-            tag.id to TagStats(fileCount, totalSize, photoCount, pdfCount)
+            val representativeMedia = matchedItems.firstOrNull { it.mediaType == MediaType.IMAGE }
+                ?: matchedItems.firstOrNull()
+            tag.id to TagStats(fileCount, totalSize, photoCount, pdfCount, representativeMedia)
         }
     }
 
@@ -97,7 +173,7 @@ fun TagsScreen(
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+                columns = GridCells.Fixed(tagColumns),
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = 12.dp, start = 12.dp, end = 12.dp, bottom = 80.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -105,73 +181,71 @@ fun TagsScreen(
             ) {
                 items(tags, key = { it.id }) { tag ->
                     val stats = tagStatsMap[tag.id] ?: TagStats()
-                    Card(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(110.dp)
                             .combinedClickable(
                                 onClick = { onTagClick(tag) },
                                 onLongClick = { contextMenuTag = tag }
                             )
                     ) {
-                        Column(
+                        // Top Media Thumbnail with fully rounded corners on all sides
+                        Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
                         ) {
-                            // Header: Color dot + Tag Name
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            val rep = stats.representativeMedia
+                            if (rep != null) {
+                                if (rep.mediaType == MediaType.IMAGE) {
+                                    AsyncImage(
+                                        model = rep.uri,
+                                        contentDescription = tag.name,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    PdfThumbnailView(
+                                        pdfManager = pdfManager,
+                                        pdf = rep,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                            } else {
                                 Box(
                                     modifier = Modifier
-                                        .size(12.dp)
+                                        .size(32.dp)
                                         .clip(CircleShape)
                                         .background(
                                             try { Color(android.graphics.Color.parseColor(tag.colorHex)) }
                                             catch (e: Exception) { Color.Gray }
                                         )
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = tag.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
                             }
+                        }
 
-                            // Bottom Section: File Statistics
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                if (stats.fileCount > 0) {
-                                    Text(
-                                        text = "${stats.fileCount} file${if (stats.fileCount > 1) "s" else ""} • ${FileUtils.formatFileSize(stats.totalSize)}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "${stats.photoCount} photo${if (stats.photoCount != 1) "s" else ""} · ${stats.pdfCount} PDF${if (stats.pdfCount != 1) "s" else ""}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                } else {
-                                    Text(
-                                        text = "No tagged files",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                            }
+                        // Info Section sitting directly on the transparent background
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = tag.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (stats.fileCount == 1) "1 file" else "${stats.fileCount} files",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -240,7 +314,7 @@ fun TagsScreen(
             initialName = "",
             initialColor = "#FF5722",
             onDismiss = { showCreateDialog = false },
-            onConfirm = { name, color ->
+            onConfirm = { name: String, color: String ->
                 coroutineScope.launch {
                     app.database.tagDao().insertTag(TagEntity(name = name, colorHex = color))
                 }
@@ -255,7 +329,7 @@ fun TagsScreen(
             initialName = tag.name,
             initialColor = tag.colorHex,
             onDismiss = { tagToEdit = null },
-            onConfirm = { name, color ->
+            onConfirm = { name: String, color: String ->
                 coroutineScope.launch {
                     app.database.tagDao().updateTag(tag.id, name, color)
                 }
@@ -325,7 +399,6 @@ fun TagCollectionScreen(
         }
     }
 
-    // Delete launcher for batch delete action
     var pendingBatchDeleteItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     val batchDeleteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -493,65 +566,4 @@ fun TagCollectionScreen(
             }
         }
     }
-}
-
-@Composable
-fun CreateEditTagDialog(
-    title: String,
-    initialName: String,
-    initialColor: String,
-    onDismiss: () -> Unit,
-    onConfirm: (name: String, colorHex: String) -> Unit
-) {
-    var name by remember { mutableStateOf(initialName) }
-    var selectedColor by remember { mutableStateOf(initialColor) }
-
-    val presetColors = listOf(
-        "#FF5722", "#3F51B5", "#4CAF50", "#009688",
-        "#9C27B0", "#FF9800", "#607D8B", "#E91E63", "#F44336"
-    )
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Tag Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Select Tag Color", style = MaterialTheme.typography.bodySmall)
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    presetColors.take(5).forEach { hex ->
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color(android.graphics.Color.parseColor(hex)))
-                                .clickable { selectedColor = hex }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = name.isNotBlank(),
-                onClick = { onConfirm(name, selectedColor) }
-            ) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
 }

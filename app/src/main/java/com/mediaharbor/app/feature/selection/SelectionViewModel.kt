@@ -12,11 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import com.mediaharbor.app.domain.model.MediaItem
-import kotlin.math.max
-import kotlin.math.min
 
 class SelectionViewModel : ViewModel() {
-    // Selection order preserved in exact sequence chosen by user
     val selectedItems = mutableStateListOf<MediaItem>()
 
     var anchorItem by mutableStateOf<MediaItem?>(null)
@@ -117,9 +114,9 @@ fun SelectionTopBar(
         modifier = Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.statusBars),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
+        color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        tonalElevation = 4.dp
+        tonalElevation = 6.dp
     ) {
         Row(
             modifier = Modifier

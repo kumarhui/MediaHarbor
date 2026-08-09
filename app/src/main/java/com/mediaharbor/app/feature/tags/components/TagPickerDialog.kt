@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.mediaharbor.app.MediaHarborApp
 import com.mediaharbor.app.data.local.entity.MediaTagCrossRef
 import com.mediaharbor.app.data.local.entity.TagEntity
+import com.mediaharbor.app.data.settings.SettingsManager
 import com.mediaharbor.app.feature.tags.CreateEditTagDialog
 import kotlinx.coroutines.launch
 
@@ -29,13 +30,28 @@ fun TagPickerDialog(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as MediaHarborApp
+    val settingsManager = remember { SettingsManager.getInstance(context) }
     val coroutineScope = rememberCoroutineScope()
 
+    val defaultTagIds by settingsManager.defaultTagIds.collectAsState()
     val allTagsRaw by app.database.tagDao().getAllTags().collectAsState(initial = emptyList())
     val assignedTags by app.database.tagDao().getTagsForMedia(mediaUri).collectAsState(initial = emptyList())
 
     val allTags = remember(allTagsRaw) { allTagsRaw.distinctBy { it.name } }
     val assignedTagIds = remember(assignedTags) { assignedTags.map { it.id }.toSet() }
+
+    // Pre-check default tags if the media item has no tags assigned yet
+    var hasInitializedDefaults by remember { mutableStateOf(false) }
+    LaunchedEffect(allTags, assignedTagIds, defaultTagIds) {
+        if (!hasInitializedDefaults && assignedTagIds.isEmpty() && defaultTagIds.isNotEmpty() && allTags.isNotEmpty()) {
+            hasInitializedDefaults = true
+            defaultTagIds.forEach { tagId ->
+                if (allTags.any { it.id == tagId }) {
+                    app.database.tagDao().addTagToMedia(MediaTagCrossRef(mediaUri, tagId))
+                }
+            }
+        }
+    }
 
     var showCreateTagDialog by remember { mutableStateOf(false) }
 

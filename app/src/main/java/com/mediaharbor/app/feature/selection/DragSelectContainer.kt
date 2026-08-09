@@ -88,12 +88,16 @@ fun DragSelectContainer(
                 }
 
                 hitItem?.let { hit ->
-                    val start = dragInitialIndex ?: hit.index
-                    if (dragInitialIndex == null) dragInitialIndex = hit.index
-                    val end = hit.index
-                    currentDragIndex = end
+                    // Map grid layout item index to MediaItem list index
+                    val itemKey = hit.key
+                    val mediaIndex = items.indexOfFirst { it.id == itemKey }
+                    val targetIndex = if (mediaIndex != -1) mediaIndex else hit.index.coerceIn(0, items.size - 1)
 
-                    val range = min(start, end)..max(start, end)
+                    val start = dragInitialIndex ?: targetIndex
+                    if (dragInitialIndex == null) dragInitialIndex = targetIndex
+                    currentDragIndex = targetIndex
+
+                    val range = min(start, targetIndex)..max(start, targetIndex)
                     items.forEachIndexed { idx, item ->
                         if (idx in range) {
                             if (!selectionViewModel.isSelected(item)) {
@@ -123,6 +127,7 @@ fun DragSelectContainer(
                     }
                 )
             } else {
+                // Press & Hold -> enters selection mode and continues dragging in one fluid motion
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset -> processDragAt(offset) },
                     onDrag = { change, _ ->

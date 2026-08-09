@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -36,6 +37,10 @@ import com.mediaharbor.app.domain.usecase.GetPhotosUseCase
 import com.mediaharbor.app.domain.usecase.SearchMediaUseCase
 import com.mediaharbor.app.feature.selection.DragSelectContainer
 import com.mediaharbor.app.feature.selection.SelectionViewModel
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class GalleryViewModel(context: android.content.Context) : ViewModel() {
     private val repo = MediaRepositoryImpl(
@@ -52,6 +57,25 @@ class GalleryViewModel(context: android.content.Context) : ViewModel() {
     }
 }
 
+private fun formatDateHeader(timestampSeconds: Long): String {
+    val date = Date(timestampSeconds * 1000)
+    val now = Calendar.getInstance()
+    val photoCal = Calendar.getInstance().apply { time = date }
+
+    return when {
+        now.get(Calendar.YEAR) == photoCal.get(Calendar.YEAR) &&
+                now.get(Calendar.DAY_OF_YEAR) == photoCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+
+        now.get(Calendar.YEAR) == photoCal.get(Calendar.YEAR) &&
+                now.get(Calendar.DAY_OF_YEAR) - photoCal.get(Calendar.DAY_OF_YEAR) == 1 -> "Yesterday"
+
+        now.get(Calendar.YEAR) == photoCal.get(Calendar.YEAR) ->
+            SimpleDateFormat("MMMM d", Locale.getDefault()).format(date)
+
+        else -> SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(date)
+    }
+}
+
 @Composable
 fun GalleryScreen(
     searchQuery: String,
@@ -62,6 +86,7 @@ fun GalleryScreen(
     val app = context.applicationContext as? MediaHarborApp
     val settingsManager = remember { SettingsManager.getInstance(context) }
     val photoColumns by settingsManager.photoColumns.collectAsState()
+    val groupByDate by settingsManager.groupByDate.collectAsState()
 
     val viewModel = remember { GalleryViewModel(context) }
     val initialPhotos = remember { MediaStoreImageDataSource.getCachedImages() ?: emptyList() }
@@ -72,6 +97,14 @@ fun GalleryScreen(
     val tagCountsList by (app?.database?.tagDao()?.getMediaTagCounts()?.collectAsState(initial = emptyList())
         ?: remember { mutableStateOf(emptyList()) })
     val tagCountMap = remember(tagCountsList) { tagCountsList.associate { it.mediaUri to it.count } }
+
+    val groupedPhotos = remember(filtered, groupByDate) {
+        if (groupByDate) {
+            filtered.groupBy { formatDateHeader(it.dateModified) }
+        } else {
+            emptyMap()
+        }
+    }
 
     var isInitialLoading by remember {
         mutableStateOf(MediaStoreImageDataSource.getCachedImages() == null && photos.isEmpty())
@@ -101,35 +134,80 @@ fun GalleryScreen(
             LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Fixed(photoColumns),
-                contentPadding = PaddingValues(4.dp),
+                contentPadding = PaddingValues(top = 4.dp, start = 4.dp, end = 4.dp, bottom = 80.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(filtered, key = { it.id }) { item ->
-                    val isSelected = selectionViewModel.isSelected(item)
-                    val tagCount = tagCountMap[item.uri.toString()] ?: 0
-
-                    PhotoTile(
-                        item = item,
-                        isSelectionMode = selectionViewModel.isSelectionMode,
-                        isSelected = isSelected,
-                        tagCount = tagCount,
-                        onClick = {
-                            if (selectionViewModel.isSelectionMode) {
-                                selectionViewModel.toggleSelection(item)
-                            } else {
-                                onMediaClick(item)
-                            }
-                        },
-                        onLongClick = {
-                            if (selectionViewModel.isSelectionMode) {
-                                selectionViewModel.selectRange(item, filtered)
-                            } else {
-                                selectionViewModel.startSelection(item)
-                            }
+                if (groupByDate && groupedPhotos.isNotEmpty()) {
+                    groupedPhotos.forEach { (dateHeader, itemsInGroup) ->
+                        item(
+                            key = "header_$dateHeader",
+                            span = { GridItemSpan(photoColumns) }
+                        ) {
+                            Text(
+                                text = dateHeader,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                            )
                         }
-                    )
+
+                        items(itemsInGroup, key = { it.id }) { item ->
+                            val isSelected = selectionViewModel.isSelected(item)
+                            val tagCount = tagCountMap[item.uri.toString()] ?: 0
+
+                            PhotoTile(
+                                item = item,
+                                isSelectionMode = selectionViewModel.isSelectionMode,
+                                isSelected = isSelected,
+                                tagCount = tagCount,
+                                onClick = {
+                                    if (selectionViewModel.isSelectionMode) {
+                                        selectionViewModel.toggleSelection(item)
+                                    } else {
+                                        onMediaClick(item)
+                                    }
+                                },
+                                onLongClick = {
+                                    if (selectionViewModel.isSelectionMode) {
+                                        selectionViewModel.selectRange(item, filtered)
+                                    } else {
+                                        selectionViewModel.startSelection(item)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                } else {
+                    items(filtered, key = { it.id }) { item ->
+                        val isSelected = selectionViewModel.isSelected(item)
+                        val tagCount = tagCountMap[item.uri.toString()] ?: 0
+
+                        PhotoTile(
+                            item = item,
+                            isSelectionMode = selectionViewModel.isSelectionMode,
+                            isSelected = isSelected,
+                            tagCount = tagCount,
+                            onClick = {
+                                if (selectionViewModel.isSelectionMode) {
+                                    selectionViewModel.toggleSelection(item)
+                                } else {
+                                    onMediaClick(item)
+                                }
+                            },
+                            onLongClick = {
+                                if (selectionViewModel.isSelectionMode) {
+                                    selectionViewModel.selectRange(item, filtered)
+                                } else {
+                                    selectionViewModel.startSelection(item)
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }

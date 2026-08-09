@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -54,6 +55,10 @@ import com.mediaharbor.app.feature.selection.SelectionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class PdfViewModel(context: android.content.Context) : ViewModel() {
     private val pdfDataSource = MediaStorePdfDataSource(context)
@@ -69,6 +74,25 @@ class PdfViewModel(context: android.content.Context) : ViewModel() {
 
     fun filterPdfs(pdfs: List<MediaItem>, query: String): List<MediaItem> {
         return searchUseCase(pdfs, query)
+    }
+}
+
+private fun formatDateHeader(timestampSeconds: Long): String {
+    val date = Date(timestampSeconds * 1000)
+    val now = Calendar.getInstance()
+    val itemCal = Calendar.getInstance().apply { time = date }
+
+    return when {
+        now.get(Calendar.YEAR) == itemCal.get(Calendar.YEAR) &&
+                now.get(Calendar.DAY_OF_YEAR) == itemCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+
+        now.get(Calendar.YEAR) == itemCal.get(Calendar.YEAR) &&
+                now.get(Calendar.DAY_OF_YEAR) - itemCal.get(Calendar.DAY_OF_YEAR) == 1 -> "Yesterday"
+
+        now.get(Calendar.YEAR) == itemCal.get(Calendar.YEAR) ->
+            SimpleDateFormat("MMMM d", Locale.getDefault()).format(date)
+
+        else -> SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(date)
     }
 }
 
@@ -124,6 +148,7 @@ fun PdfScreen(
     val app = context.applicationContext as? MediaHarborApp
     val settingsManager = remember { SettingsManager.getInstance(context) }
     val pdfColumns by settingsManager.pdfColumns.collectAsState()
+    val groupPdfByDate by settingsManager.groupPdfByDate.collectAsState()
 
     val viewModel = remember { PdfViewModel(context) }
     val pdfManager = remember { PdfRendererManager(context) }
@@ -141,6 +166,14 @@ fun PdfScreen(
         mutableStateOf(MediaStorePdfDataSource.getCachedPdfs() == null && (isScanning || pdfs.isEmpty()))
     }
     val filtered = remember(pdfs, searchQuery) { viewModel.filterPdfs(pdfs, searchQuery) }
+
+    val groupedPdfs = remember(filtered, groupPdfByDate) {
+        if (groupPdfByDate) {
+            filtered.groupBy { formatDateHeader(it.dateModified) }
+        } else {
+            emptyMap()
+        }
+    }
 
     LaunchedEffect(pdfs, isScanning) {
         if (pdfs.isNotEmpty() || !isScanning) {
@@ -239,31 +272,77 @@ fun PdfScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(filtered, key = { it.id }) { pdf ->
-                    val isSelected = selectionViewModel.isSelected(pdf)
-                    val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
-
-                    PdfGridCard(
-                        pdf = pdf,
-                        pdfManager = pdfManager,
-                        isSelectionMode = selectionViewModel.isSelectionMode,
-                        isSelected = isSelected,
-                        tagCount = tagCount,
-                        onClick = {
-                            if (selectionViewModel.isSelectionMode) {
-                                selectionViewModel.toggleSelection(pdf)
-                            } else {
-                                onMediaClick(pdf)
-                            }
-                        },
-                        onLongClick = {
-                            if (selectionViewModel.isSelectionMode) {
-                                selectionViewModel.selectRange(pdf, filtered)
-                            } else {
-                                selectionViewModel.startSelection(pdf)
-                            }
+                if (groupPdfByDate && groupedPdfs.isNotEmpty()) {
+                    groupedPdfs.forEach { (dateHeader, itemsInGroup) ->
+                        item(
+                            key = "pdf_header_$dateHeader",
+                            span = { GridItemSpan(pdfColumns) }
+                        ) {
+                            Text(
+                                text = dateHeader,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                            )
                         }
-                    )
+
+                        items(itemsInGroup, key = { it.id }) { pdf ->
+                            val isSelected = selectionViewModel.isSelected(pdf)
+                            val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
+
+                            PdfGridCard(
+                                pdf = pdf,
+                                pdfManager = pdfManager,
+                                isSelectionMode = selectionViewModel.isSelectionMode,
+                                isSelected = isSelected,
+                                tagCount = tagCount,
+                                onClick = {
+                                    if (selectionViewModel.isSelectionMode) {
+                                        selectionViewModel.toggleSelection(pdf)
+                                    } else {
+                                        onMediaClick(pdf)
+                                    }
+                                },
+                                onLongClick = {
+                                    if (selectionViewModel.isSelectionMode) {
+                                        selectionViewModel.selectRange(pdf, filtered)
+                                    } else {
+                                        selectionViewModel.startSelection(pdf)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                } else {
+                    items(filtered, key = { it.id }) { pdf ->
+                        val isSelected = selectionViewModel.isSelected(pdf)
+                        val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
+
+                        PdfGridCard(
+                            pdf = pdf,
+                            pdfManager = pdfManager,
+                            isSelectionMode = selectionViewModel.isSelectionMode,
+                            isSelected = isSelected,
+                            tagCount = tagCount,
+                            onClick = {
+                                if (selectionViewModel.isSelectionMode) {
+                                    selectionViewModel.toggleSelection(pdf)
+                                } else {
+                                    onMediaClick(pdf)
+                                }
+                            },
+                            onLongClick = {
+                                if (selectionViewModel.isSelectionMode) {
+                                    selectionViewModel.selectRange(pdf, filtered)
+                                } else {
+                                    selectionViewModel.startSelection(pdf)
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -281,94 +360,95 @@ fun PdfGridCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
-            ),
-        colors = if (isSelected) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        else CardDefaults.cardColors()
+            )
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.85f)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-            ) {
-                PdfThumbnailView(
-                    pdfManager = pdfManager,
-                    pdf = pdf,
-                    modifier = Modifier.fillMaxSize()
-                )
+        // Thumbnail with fully rounded corners on all 4 sides
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.85f)
+                .clip(RoundedCornerShape(12.dp))
+        ) {
+            PdfThumbnailView(
+                pdfManager = pdfManager,
+                pdf = pdf,
+                modifier = Modifier.fillMaxSize()
+            )
 
-                if (tagCount > 0) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        tonalElevation = 2.dp,
-                        shadowElevation = 2.dp,
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(6.dp)
+            if (tagCount > 0) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    tonalElevation = 2.dp,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Label,
-                                contentDescription = "Tags",
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(
-                                text = "$tagCount",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Label,
+                            contentDescription = "Tags",
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = "$tagCount",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
-
-                if (isSelectionMode) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
-                    )
-                    Icon(
-                        imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Outlined.Circle,
-                        contentDescription = "Selected",
-                        tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                            .size(24.dp)
-                            .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                    )
-                }
             }
 
-            Column(modifier = Modifier.padding(8.dp)) {
-                Text(
-                    text = pdf.displayName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            if (isSelectionMode) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = FileUtils.formatFileSize(pdf.size),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Icon(
+                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Outlined.Circle,
+                    contentDescription = "Selected",
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(24.dp)
+                        .background(Color.Black.copy(alpha = 0.3f), CircleShape)
                 )
             }
+        }
+
+        // Text & Metadata sitting directly on the transparent background
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = pdf.displayName,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = FileUtils.formatFileSize(pdf.size),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
