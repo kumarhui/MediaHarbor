@@ -54,13 +54,16 @@ fun DragSelectContainer(
                         currentPointerY >= top && currentPointerY <= bottom
                     }
                     hitItem?.let { hit ->
-                        currentDragIndex = hit.index
-                        dragInitialIndex?.let { start ->
-                            val range = min(start, hit.index)..max(start, hit.index)
-                            items.forEachIndexed { idx, item ->
-                                if (idx in range) {
-                                    if (!selectionViewModel.isSelected(item)) {
-                                        selectionViewModel.startSelection(item)
+                        val mediaIndex = items.indexOfFirst { it.id == hit.key }
+                        if (mediaIndex != -1) {
+                            currentDragIndex = mediaIndex
+                            dragInitialIndex?.let { start ->
+                                val range = min(start, mediaIndex)..max(start, mediaIndex)
+                                items.forEachIndexed { idx, item ->
+                                    if (idx in range) {
+                                        if (!selectionViewModel.isSelected(item)) {
+                                            selectionViewModel.startSelection(item)
+                                        }
                                     }
                                 }
                             }
@@ -88,20 +91,19 @@ fun DragSelectContainer(
                 }
 
                 hitItem?.let { hit ->
-                    // Map grid layout item index to MediaItem list index
-                    val itemKey = hit.key
-                    val mediaIndex = items.indexOfFirst { it.id == itemKey }
-                    val targetIndex = if (mediaIndex != -1) mediaIndex else hit.index.coerceIn(0, items.size - 1)
+                    // Map grid layout item key strictly to MediaItem list index
+                    val mediaIndex = items.indexOfFirst { it.id == hit.key }
+                    if (mediaIndex != -1) {
+                        val start = dragInitialIndex ?: mediaIndex
+                        if (dragInitialIndex == null) dragInitialIndex = mediaIndex
+                        currentDragIndex = mediaIndex
 
-                    val start = dragInitialIndex ?: targetIndex
-                    if (dragInitialIndex == null) dragInitialIndex = targetIndex
-                    currentDragIndex = targetIndex
-
-                    val range = min(start, targetIndex)..max(start, targetIndex)
-                    items.forEachIndexed { idx, item ->
-                        if (idx in range) {
-                            if (!selectionViewModel.isSelected(item)) {
-                                selectionViewModel.startSelection(item)
+                        val range = min(start, mediaIndex)..max(start, mediaIndex)
+                        items.forEachIndexed { idx, item ->
+                            if (idx in range) {
+                                if (!selectionViewModel.isSelected(item)) {
+                                    selectionViewModel.startSelection(item)
+                                }
                             }
                         }
                     }

@@ -134,8 +134,6 @@ class MediaStorePdfDataSource(private val context: Context) {
                         val modified = file.lastModified()
                         val uri = Uri.fromFile(file)
 
-                        Log.d("PDF_DEBUG", "PDF FOUND: path=$path size=$size modified=$modified")
-
                         val relativePath = path.removePrefix(rootDir.absolutePath).removePrefix("/")
                         val bucketName = file.parentFile?.name ?: ""
 
@@ -164,6 +162,9 @@ class MediaStorePdfDataSource(private val context: Context) {
         if (rootDir != null && rootDir.exists()) {
             walk(rootDir)
         }
+
+        // Sort filesystem-scanned PDFs by date modified descending (newest first)
+        list.sortWith(compareByDescending<MediaItem> { it.dateModified }.thenBy { it.displayName })
 
         Log.d("PDF_DEBUG", "PDF scan completed. Total PDFs found: ${list.size}")
         return list
@@ -202,8 +203,6 @@ class MediaStorePdfDataSource(private val context: Context) {
                 selectionArgs,
                 sortOrder
             )?.use { cursor ->
-                Log.d("PDF_DEBUG", "MediaStore PDF cursor count: ${cursor.count}")
-
                 val idCol = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID)
                 val nameCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME)
                 val mimeCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.MIME_TYPE)

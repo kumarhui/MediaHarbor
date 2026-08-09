@@ -168,10 +168,19 @@ fun PdfScreen(
     val filtered = remember(pdfs, searchQuery) { viewModel.filterPdfs(pdfs, searchQuery) }
 
     val groupedPdfs = remember(filtered, groupPdfByDate) {
-        if (groupPdfByDate) {
+        if (groupPdfByDate && filtered.isNotEmpty()) {
             filtered.groupBy { formatDateHeader(it.dateModified) }
         } else {
             emptyMap()
+        }
+    }
+
+    // Flatten grouped items so the 0-indexed list sequence matches visual grid layout exactly
+    val displayedList = remember(filtered, groupedPdfs, groupPdfByDate) {
+        if (groupPdfByDate && groupedPdfs.isNotEmpty()) {
+            groupedPdfs.values.flatten()
+        } else {
+            filtered
         }
     }
 
@@ -260,7 +269,7 @@ fun PdfScreen(
     } else {
         DragSelectContainer(
             gridState = gridState,
-            items = filtered,
+            items = displayedList,
             selectionViewModel = selectionViewModel,
             modifier = Modifier.fillMaxSize()
         ) {
@@ -308,7 +317,7 @@ fun PdfScreen(
                                 },
                                 onLongClick = {
                                     if (selectionViewModel.isSelectionMode) {
-                                        selectionViewModel.selectRange(pdf, filtered)
+                                        selectionViewModel.selectRange(pdf, displayedList)
                                     } else {
                                         selectionViewModel.startSelection(pdf)
                                     }
@@ -317,7 +326,7 @@ fun PdfScreen(
                         }
                     }
                 } else {
-                    items(filtered, key = { it.id }) { pdf ->
+                    items(displayedList, key = { it.id }) { pdf ->
                         val isSelected = selectionViewModel.isSelected(pdf)
                         val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
 
@@ -336,7 +345,7 @@ fun PdfScreen(
                             },
                             onLongClick = {
                                 if (selectionViewModel.isSelectionMode) {
-                                    selectionViewModel.selectRange(pdf, filtered)
+                                    selectionViewModel.selectRange(pdf, displayedList)
                                 } else {
                                     selectionViewModel.startSelection(pdf)
                                 }
@@ -368,7 +377,6 @@ fun PdfGridCard(
                 onLongClick = onLongClick
             )
     ) {
-        // Thumbnail with fully rounded corners on all 4 sides
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -430,7 +438,6 @@ fun PdfGridCard(
             }
         }
 
-        // Text & Metadata sitting directly on the transparent background
         Column(
             modifier = Modifier
                 .fillMaxWidth()
