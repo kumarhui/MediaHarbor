@@ -101,6 +101,10 @@ fun SettingsScreen() {
     var showRemoveTagsMediaTypeModal by remember { mutableStateOf(false) }
     var removeTagsTargetType by remember { mutableStateOf<String?>(null) }
 
+    var showPhotoColumnsDialog by remember { mutableStateOf(false) }
+    var showPdfColumnsDialog by remember { mutableStateOf(false) }
+    var showTagColumnsDialog by remember { mutableStateOf(false) }
+
     val defaultTagNamesSummary = remember(allTags, defaultTagIds) {
         val selected = allTags.filter { defaultTagIds.contains(it.id) }.map { it.name }
         if (selected.isEmpty()) {
@@ -175,37 +179,25 @@ fun SettingsScreen() {
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text("Photos per row: $photoColumns", style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = photoColumns.toFloat(),
-            onValueChange = { settingsManager.setPhotoColumns(it.toInt()) },
-            valueRange = 2f..5f,
-            steps = 2,
-            modifier = Modifier.fillMaxWidth()
+        SettingsItemRow(
+            icon = Icons.Default.GridOn,
+            title = "Photos per row",
+            subtitle = "$photoColumns items per row",
+            onClick = { showPhotoColumnsDialog = true }
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text("PDFs per row: $pdfColumns", style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = pdfColumns.toFloat(),
-            onValueChange = { settingsManager.setPdfColumns(it.toInt()) },
-            valueRange = 2f..5f,
-            steps = 2,
-            modifier = Modifier.fillMaxWidth()
+        SettingsItemRow(
+            icon = Icons.Default.GridView,
+            title = "PDFs per row",
+            subtitle = "$pdfColumns items per row",
+            onClick = { showPdfColumnsDialog = true }
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text("Tags per row: $tagColumns", style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = tagColumns.toFloat(),
-            onValueChange = { settingsManager.setTagColumns(it.toInt()) },
-            valueRange = 2f..5f,
-            steps = 2,
-            modifier = Modifier.fillMaxWidth()
+        SettingsItemRow(
+            icon = Icons.Default.ViewModule,
+            title = "Tags per row",
+            subtitle = "$tagColumns items per row",
+            onClick = { showTagColumnsDialog = true }
         )
 
         Divider(modifier = Modifier.padding(vertical = 12.dp))
@@ -283,7 +275,8 @@ fun SettingsScreen() {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 260.dp)
+                                .heightIn(max = 280.dp)
+                                .verticalScroll(rememberScrollState())
                         ) {
                             allTags.forEach { tag ->
                                 val isChecked = tempSelectedIds.contains(tag.id)
@@ -321,6 +314,99 @@ fun SettingsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { showDefaultTagsDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showPhotoColumnsDialog) {
+        var tempValue by remember { mutableFloatStateOf(photoColumns.toFloat()) }
+        AlertDialog(
+            onDismissRequest = { showPhotoColumnsDialog = false },
+            title = { Text("Photos per row") },
+            text = {
+                Column {
+                    Text("Items per row: ${tempValue.toInt()}", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Slider(
+                        value = tempValue,
+                        onValueChange = { tempValue = it },
+                        valueRange = 2f..5f,
+                        steps = 2
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    settingsManager.setPhotoColumns(tempValue.toInt())
+                    showPhotoColumnsDialog = false
+                }) {
+                    Text("Done")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPhotoColumnsDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showPdfColumnsDialog) {
+        var tempValue by remember { mutableFloatStateOf(pdfColumns.toFloat()) }
+        AlertDialog(
+            onDismissRequest = { showPdfColumnsDialog = false },
+            title = { Text("PDFs per row") },
+            text = {
+                Column {
+                    Text("Items per row: ${tempValue.toInt()}", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Slider(
+                        value = tempValue,
+                        onValueChange = { tempValue = it },
+                        valueRange = 2f..5f,
+                        steps = 2
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    settingsManager.setPdfColumns(tempValue.toInt())
+                    showPdfColumnsDialog = false
+                }) {
+                    Text("Done")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPdfColumnsDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showTagColumnsDialog) {
+        var tempValue by remember { mutableFloatStateOf(tagColumns.toFloat()) }
+        AlertDialog(
+            onDismissRequest = { showTagColumnsDialog = false },
+            title = { Text("Tags per row") },
+            text = {
+                Column {
+                    Text("Items per row: ${tempValue.toInt()}", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Slider(
+                        value = tempValue,
+                        onValueChange = { tempValue = it },
+                        valueRange = 2f..5f,
+                        steps = 2
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    settingsManager.setTagColumns(tempValue.toInt())
+                    showTagColumnsDialog = false
+                }) {
+                    Text("Done")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTagColumnsDialog = false }) { Text("Cancel") }
             }
         )
     }

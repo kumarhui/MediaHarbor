@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -267,38 +268,79 @@ fun PdfScreen(
             Text("No PDF documents found", style = MaterialTheme.typography.bodyLarge)
         }
     } else {
-        DragSelectContainer(
-            gridState = gridState,
-            items = displayedList,
-            selectionViewModel = selectionViewModel,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            LazyVerticalGrid(
-                state = gridState,
-                columns = GridCells.Fixed(pdfColumns),
-                contentPadding = PaddingValues(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 80.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        val scrollProgress by remember {
+            derivedStateOf {
+                val total = gridState.layoutInfo.totalItemsCount
+                val visible = gridState.layoutInfo.visibleItemsInfo.size
+                if (total <= visible || total == 0) 0f
+                else {
+                    val first = gridState.firstVisibleItemIndex
+                    (first.toFloat() / (total - visible).toFloat()).coerceIn(0f, 1f)
+                }
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            DragSelectContainer(
+                gridState = gridState,
+                items = displayedList,
+                selectionViewModel = selectionViewModel,
                 modifier = Modifier.fillMaxSize()
             ) {
-                if (groupPdfByDate && groupedPdfs.isNotEmpty()) {
-                    groupedPdfs.forEach { (dateHeader, itemsInGroup) ->
-                        item(
-                            key = "pdf_header_$dateHeader",
-                            span = { GridItemSpan(pdfColumns) }
-                        ) {
-                            Text(
-                                text = dateHeader,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 8.dp)
-                            )
-                        }
+                LazyVerticalGrid(
+                    state = gridState,
+                    columns = GridCells.Fixed(pdfColumns),
+                    contentPadding = PaddingValues(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 80.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    if (groupPdfByDate && groupedPdfs.isNotEmpty()) {
+                        groupedPdfs.forEach { (dateHeader, itemsInGroup) ->
+                            item(
+                                key = "pdf_header_$dateHeader",
+                                span = { GridItemSpan(pdfColumns) }
+                            ) {
+                                Text(
+                                    text = dateHeader,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                                )
+                            }
 
-                        items(itemsInGroup, key = { it.id }) { pdf ->
+                            items(itemsInGroup, key = { it.id }) { pdf ->
+                                val isSelected = selectionViewModel.isSelected(pdf)
+                                val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
+
+                                PdfGridCard(
+                                    pdf = pdf,
+                                    pdfManager = pdfManager,
+                                    isSelectionMode = selectionViewModel.isSelectionMode,
+                                    isSelected = isSelected,
+                                    tagCount = tagCount,
+                                    onClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.toggleSelection(pdf)
+                                        } else {
+                                            onMediaClick(pdf)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.selectRange(pdf, displayedList)
+                                        } else {
+                                            selectionViewModel.startSelection(pdf)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    } else {
+                        items(displayedList, key = { it.id }) { pdf ->
                             val isSelected = selectionViewModel.isSelected(pdf)
                             val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
 
@@ -325,33 +367,32 @@ fun PdfScreen(
                             )
                         }
                     }
-                } else {
-                    items(displayedList, key = { it.id }) { pdf ->
-                        val isSelected = selectionViewModel.isSelected(pdf)
-                        val tagCount = tagCountMap[pdf.uri.toString()] ?: 0
+                }
+            }
 
-                        PdfGridCard(
-                            pdf = pdf,
-                            pdfManager = pdfManager,
-                            isSelectionMode = selectionViewModel.isSelectionMode,
-                            isSelected = isSelected,
-                            tagCount = tagCount,
-                            onClick = {
-                                if (selectionViewModel.isSelectionMode) {
-                                    selectionViewModel.toggleSelection(pdf)
-                                } else {
-                                    onMediaClick(pdf)
-                                }
-                            },
-                            onLongClick = {
-                                if (selectionViewModel.isSelectionMode) {
-                                    selectionViewModel.selectRange(pdf, displayedList)
-                                } else {
-                                    selectionViewModel.startSelection(pdf)
-                                }
-                            }
-                        )
-                    }
+            if (filtered.size > 15) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 2.dp, top = 8.dp, bottom = 80.dp)
+                        .fillMaxHeight()
+                        .width(4.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.15f)
+                            .align(
+                                BiasAlignment(
+                                    horizontalBias = 0f,
+                                    verticalBias = (scrollProgress * 2f) - 1f
+                                )
+                            )
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                    )
                 }
             }
         }

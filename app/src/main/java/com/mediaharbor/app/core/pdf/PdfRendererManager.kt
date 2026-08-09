@@ -159,6 +159,9 @@ class PdfRendererManager(private val context: Context) {
                         val targetHeight = (targetWidth * aspectRatio).toInt().coerceAtLeast(1)
 
                         val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(bmp)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+
                         page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         page.close()
                         bmp

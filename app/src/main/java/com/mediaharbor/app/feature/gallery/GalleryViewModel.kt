@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -125,38 +126,78 @@ fun GalleryScreen(
             Text("No Photos Found", style = MaterialTheme.typography.bodyLarge)
         }
     } else {
-        DragSelectContainer(
-            gridState = gridState,
-            items = filtered,
-            selectionViewModel = selectionViewModel,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            LazyVerticalGrid(
-                state = gridState,
-                columns = GridCells.Fixed(photoColumns),
-                contentPadding = PaddingValues(top = 4.dp, start = 4.dp, end = 4.dp, bottom = 80.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+        val scrollProgress by remember {
+            derivedStateOf {
+                val total = gridState.layoutInfo.totalItemsCount
+                val visible = gridState.layoutInfo.visibleItemsInfo.size
+                if (total <= visible || total == 0) 0f
+                else {
+                    val first = gridState.firstVisibleItemIndex
+                    (first.toFloat() / (total - visible).toFloat()).coerceIn(0f, 1f)
+                }
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            DragSelectContainer(
+                gridState = gridState,
+                items = filtered,
+                selectionViewModel = selectionViewModel,
                 modifier = Modifier.fillMaxSize()
             ) {
-                if (groupByDate && groupedPhotos.isNotEmpty()) {
-                    groupedPhotos.forEach { (dateHeader, itemsInGroup) ->
-                        item(
-                            key = "header_$dateHeader",
-                            span = { GridItemSpan(photoColumns) }
-                        ) {
-                            Text(
-                                text = dateHeader,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 8.dp)
-                            )
-                        }
+                LazyVerticalGrid(
+                    state = gridState,
+                    columns = GridCells.Fixed(photoColumns),
+                    contentPadding = PaddingValues(top = 4.dp, start = 4.dp, end = 4.dp, bottom = 80.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    if (groupByDate && groupedPhotos.isNotEmpty()) {
+                        groupedPhotos.forEach { (dateHeader, itemsInGroup) ->
+                            item(
+                                key = "header_$dateHeader",
+                                span = { GridItemSpan(photoColumns) }
+                            ) {
+                                Text(
+                                    text = dateHeader,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                                )
+                            }
 
-                        items(itemsInGroup, key = { it.id }) { item ->
+                            items(itemsInGroup, key = { it.id }) { item ->
+                                val isSelected = selectionViewModel.isSelected(item)
+                                val tagCount = tagCountMap[item.uri.toString()] ?: 0
+
+                                PhotoTile(
+                                    item = item,
+                                    isSelectionMode = selectionViewModel.isSelectionMode,
+                                    isSelected = isSelected,
+                                    tagCount = tagCount,
+                                    onClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.toggleSelection(item)
+                                        } else {
+                                            onMediaClick(item)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectionViewModel.isSelectionMode) {
+                                            selectionViewModel.selectRange(item, filtered)
+                                        } else {
+                                            selectionViewModel.startSelection(item)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    } else {
+                        items(filtered, key = { it.id }) { item ->
                             val isSelected = selectionViewModel.isSelected(item)
                             val tagCount = tagCountMap[item.uri.toString()] ?: 0
 
@@ -182,32 +223,32 @@ fun GalleryScreen(
                             )
                         }
                     }
-                } else {
-                    items(filtered, key = { it.id }) { item ->
-                        val isSelected = selectionViewModel.isSelected(item)
-                        val tagCount = tagCountMap[item.uri.toString()] ?: 0
+                }
+            }
 
-                        PhotoTile(
-                            item = item,
-                            isSelectionMode = selectionViewModel.isSelectionMode,
-                            isSelected = isSelected,
-                            tagCount = tagCount,
-                            onClick = {
-                                if (selectionViewModel.isSelectionMode) {
-                                    selectionViewModel.toggleSelection(item)
-                                } else {
-                                    onMediaClick(item)
-                                }
-                            },
-                            onLongClick = {
-                                if (selectionViewModel.isSelectionMode) {
-                                    selectionViewModel.selectRange(item, filtered)
-                                } else {
-                                    selectionViewModel.startSelection(item)
-                                }
-                            }
-                        )
-                    }
+            if (filtered.size > 20) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 2.dp, top = 8.dp, bottom = 80.dp)
+                        .fillMaxHeight()
+                        .width(4.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.15f)
+                            .align(
+                                BiasAlignment(
+                                    horizontalBias = 0f,
+                                    verticalBias = (scrollProgress * 2f) - 1f
+                                )
+                            )
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                    )
                 }
             }
         }
