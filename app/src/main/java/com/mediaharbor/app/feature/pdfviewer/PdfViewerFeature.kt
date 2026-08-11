@@ -40,6 +40,7 @@ import com.mediaharbor.app.domain.usecase.ConvertPdfToImagesUseCase
 import com.mediaharbor.app.feature.sharing.PrintHelper
 import com.mediaharbor.app.feature.sharing.ShareHelper
 import com.mediaharbor.app.feature.tags.components.TagPickerDialog
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
@@ -50,15 +51,23 @@ fun PdfPageRenderCard(
     pdfSession: PdfSession?,
     mediaItem: MediaItem,
     pageIndex: Int,
+    docScale: Float,
     onTap: () -> Unit
 ) {
+    val scaleBucket = remember(docScale) { (docScale * 1.5f).toInt().coerceIn(1, 3) }
+
+    // Preserve previously rendered bitmap when scale changes so zooming remains continuous and smooth
     var bitmap by remember(mediaItem.uri, pageIndex) {
-        mutableStateOf<Bitmap?>(pdfManager.getCachedPage(mediaItem.uri, pageIndex))
+        mutableStateOf<Bitmap?>(pdfManager.getCachedPage(mediaItem.uri, pageIndex, scaleBucket))
     }
 
-    LaunchedEffect(pdfSession, pageIndex) {
-        if (bitmap == null && pdfSession != null) {
-            bitmap = pdfManager.renderPage(pdfSession, mediaItem.uri, pageIndex)
+    LaunchedEffect(pdfSession, pageIndex, scaleBucket) {
+        if (pdfSession != null) {
+            val targetScale = docScale.coerceIn(1.0f, 3.0f)
+            val newBmp = pdfManager.renderPage(pdfSession, mediaItem.uri, pageIndex, targetScale)
+            if (newBmp != null) {
+                bitmap = newBmp
+            }
         }
     }
 
@@ -117,7 +126,15 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
     var showTagPickerDialog by remember { mutableStateOf(false) }
     var isChromeVisible by remember { mutableStateOf(true) }
 
-    // Shared document-level viewport state for whole-PDF zoom & pan
+    var rotationDegrees by remember { mutableFloatStateOf(0f) }
+
+    // Conversion state
+    var showConvertConfirmationDialog by remember { mutableStateOf(false) }
+    var isConverting by remember { mutableStateOf(false) }
+    var conversionProgressCurrent by remember { mutableIntStateOf(0) }
+    var conversionProgressTotal by remember { mutableIntStateOf(0) }
+    var conversionJob by remember { mutableStateOf<Job?>(null) }
+
     var docScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
 
@@ -150,13 +167,6 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
         onDispose {
             pdfSession?.close()
             pdfSession = null
-        }
-    }
-
-    LaunchedEffect(currentPage, pdfSession, pageCount) {
-        val session = pdfSession
-        if (session != null && pageCount > 0) {
-            pdfManager.preloadNearbyPages(session, media.uri, currentPage - 1, pageCount)
         }
     }
 
@@ -215,18 +225,6 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
             Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
             return
         }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(item.uri))
-                pendingDeleteMedia = item
-                deleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
-            } catch (e: Exception) {
-                Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(context, "Could not delete document", Toast.LENGTH_SHORT).show()
-        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
@@ -269,7 +267,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
             )
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
-                AnimatedVisibility(
+                this@Column.AnimatedVisibility(
                     visible = isChromeVisible,
                     enter = fadeIn() + slideInVertically(),
                     exit = fadeOut() + slideOutVertically()
@@ -308,13 +306,45 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                                 }
                                 DropdownMenu(expanded = overflowExpanded, onDismissRequest = { overflowExpanded = false }) {
                                     DropdownMenuItem(
+                                        text = { Text("Rotate Left (-90°)") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            rotationDegrees = (rotationDegrees - 90f) % 360f
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Rotate Right (+90°)") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            rotationDegrees = (rotationDegrees + 90f) % 360f
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Open With") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            ShareHelper.openWith(context, media.uri, media.mimeType)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Share With...") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            ShareHelper.shareGeneral(context, media.uri, media.mimeType)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Print With NokoPrint") },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            PrintHelper.printWithNokoPrint(context, listOf(media))
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Convert to Images") },
                                         onClick = {
                                             overflowExpanded = false
-                                            coroutineScope.launch {
-                                                ConvertPdfToImagesUseCase(context)(media.uri, media.displayName.removeSuffix(".pdf")) { _, _ -> }
-                                                Toast.makeText(context, "Converted PDF to Images in Pictures/MediaHarbor", Toast.LENGTH_LONG).show()
-                                            }
+                                            showConvertConfirmationDialog = true
                                         }
                                     )
                                     DropdownMenuItem(
@@ -328,7 +358,6 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                             }
                         }
 
-                        // Horizontal Reading Progress Bar
                         if (pageCount > 0) {
                             val readingProgress = (currentPage.toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
                             LinearProgressIndicator(
@@ -394,6 +423,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                                 .graphicsLayer {
                                     scaleX = docScale
                                     scaleY = docScale
+                                    rotationZ = rotationDegrees
                                     translationX = panOffset.x
                                     translationY = panOffset.y
                                 },
@@ -406,12 +436,13 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                                     pdfSession = pdfSession,
                                     mediaItem = media,
                                     pageIndex = index,
+                                    docScale = docScale,
                                     onTap = { isChromeVisible = !isChromeVisible }
                                 )
                             }
                         }
 
-                        androidx.compose.animation.AnimatedVisibility(
+                        this@Column.AnimatedVisibility(
                             visible = isChromeVisible,
                             enter = fadeIn(),
                             exit = fadeOut(),
@@ -450,7 +481,7 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     }
                 }
 
-                AnimatedVisibility(
+                this@Column.AnimatedVisibility(
                     visible = isChromeVisible,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                     exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
@@ -483,8 +514,9 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                             Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
                         }
 
-                        IconButton(onClick = { PrintHelper.printPdf(context, media.uri, media.displayName) }) {
-                            Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
+                        // Single Print action using PrintHelper
+                        IconButton(onClick = { PrintHelper.printWithNokoPrint(context, listOf(media)) }) {
+                            Icon(Icons.Default.LocalPrintshop, contentDescription = "Print", tint = Color.White)
                         }
 
                         IconButton(onClick = { showTagPickerDialog = true }) {
@@ -516,6 +548,81 @@ fun PdfViewerScreen(media: MediaItem, onDismiss: () -> Unit) {
                     }
                 }
             }
+        }
+
+        if (showConvertConfirmationDialog) {
+            AlertDialog(
+                onDismissRequest = { showConvertConfirmationDialog = false },
+                title = { Text("Convert PDF to Images") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("This document contains $pageCount page(s).")
+                        if (pageCount > 5) {
+                            Text(
+                                "Because it has more than 5 pages, extracted JPEG images will be stored in a dedicated directory: Pictures/MediaHarbor/${media.displayName.removeSuffix(".pdf")}/",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Text("All pages will be converted into high-quality JPEG images in your Pictures/MediaHarbor folder.")
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showConvertConfirmationDialog = false
+                        isConverting = true
+                        conversionProgressCurrent = 0
+                        conversionProgressTotal = pageCount
+
+                        val folderTitle = media.displayName.removeSuffix(".pdf")
+                        conversionJob = coroutineScope.launch {
+                            val result = ConvertPdfToImagesUseCase(context)(media.uri, folderTitle) { current, total ->
+                                conversionProgressCurrent = current
+                                conversionProgressTotal = total
+                            }
+                            isConverting = false
+                            if (result.isSuccess) {
+                                Toast.makeText(context, "Successfully extracted $pageCount images to Pictures/MediaHarbor/$folderTitle", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Conversion failed or cancelled", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }) {
+                        Text("Convert")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showConvertConfirmationDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (isConverting) {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Converting PDF...") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Converting page $conversionProgressCurrent of $conversionProgressTotal")
+                        LinearProgressIndicator(
+                            progress = { if (conversionProgressTotal > 0) conversionProgressCurrent.toFloat() / conversionProgressTotal.toFloat() else 0f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        conversionJob?.cancel()
+                        isConverting = false
+                        Toast.makeText(context, "Conversion cancelled", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Text("Cancel", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            )
         }
 
         if (showTagPickerDialog) {

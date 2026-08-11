@@ -81,7 +81,6 @@ fun ImageViewerScreen(
     val app = context.applicationContext as MediaHarborApp
     val tagsState by app.database.tagDao().getTagsForMedia(currentMedia.uri.toString()).collectAsState(initial = emptyList())
 
-    // Zoom and pan state
     var scale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var containerSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -160,18 +159,6 @@ fun ImageViewerScreen(
         } catch (e: Exception) {
             Toast.makeText(context, "Could not delete image", Toast.LENGTH_SHORT).show()
             return
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(item.uri))
-                pendingDeleteMedia = item
-                deleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
-            } catch (e: Exception) {
-                Toast.makeText(context, "Could not delete image", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(context, "Could not delete image", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -270,39 +257,6 @@ fun ImageViewerScreen(
 
         AnimatedVisibility(
             visible = isControlsVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .windowInsetsPadding(WindowInsets.systemBars)
-                .padding(end = 16.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                FloatingActionButton(
-                    onClick = { scale = (scale + 0.5f).coerceAtMost(5f) },
-                    containerColor = Color.Black.copy(alpha = 0.6f),
-                    contentColor = Color.White,
-                    modifier = Modifier.size(44.dp)
-                ) {
-                    Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In")
-                }
-
-                FloatingActionButton(
-                    onClick = {
-                        scale = (scale - 0.5f).coerceAtLeast(1f)
-                        if (scale == 1f) panOffset = Offset.Zero
-                    },
-                    containerColor = Color.Black.copy(alpha = 0.6f),
-                    contentColor = Color.White,
-                    modifier = Modifier.size(44.dp)
-                ) {
-                    Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out")
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = isControlsVisible,
             enter = fadeIn() + slideInVertically(),
             exit = fadeOut() + slideOutVertically(),
             modifier = Modifier.align(Alignment.TopCenter)
@@ -360,10 +314,10 @@ fun ImageViewerScreen(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Print With") },
+                            text = { Text("Print With NokoPrint") },
                             onClick = {
                                 overflowExpanded = false
-                                PrintHelper.printPdf(context, currentMedia.uri, currentMedia.displayName)
+                                PrintHelper.printWithNokoPrint(context, listOf(currentMedia))
                             }
                         )
                         DropdownMenuItem(
@@ -435,8 +389,9 @@ fun ImageViewerScreen(
                         Icon(Icons.Default.Send, contentDescription = "WhatsApp Share", tint = Color(0xFF25D366))
                     }
 
-                    IconButton(onClick = { PrintHelper.printPdf(context, currentMedia.uri, currentMedia.displayName) }) {
-                        Icon(Icons.Default.Print, contentDescription = "Print", tint = Color.White)
+                    // Single Print button powered by PrintHelper
+                    IconButton(onClick = { PrintHelper.printWithNokoPrint(context, listOf(currentMedia)) }) {
+                        Icon(Icons.Default.LocalPrintshop, contentDescription = "Print", tint = Color.White)
                     }
 
                     IconButton(onClick = { showTagPickerDialog = true }) {

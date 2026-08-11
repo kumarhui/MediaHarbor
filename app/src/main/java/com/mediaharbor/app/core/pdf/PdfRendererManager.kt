@@ -3,6 +3,8 @@ package com.mediaharbor.app.core.pdf
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
@@ -18,6 +20,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.min
+import kotlin.math.sqrt
 
 class PdfSession(
     val pfd: ParcelFileDescriptor,
@@ -39,6 +43,10 @@ class PdfRendererManager(private val context: Context) {
 
     companion object {
         private const val TAG = "PDF_CACHE"
+
+        // Hard safety limits for Android Canvas bitmap allocation
+        private const val MAX_DIMENSION = 2880 // Max single dimension in pixels
+        private const val MAX_PIXELS = 8_000_000 // Max total pixels (~32 MB in ARGB_8888)
 
         // Shared static LRU memory cache across instances
         private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
@@ -100,9 +108,9 @@ class PdfRendererManager(private val context: Context) {
         count
     }
 
-    fun getCachedPage(pdfUri: Uri, pageIndex: Int): Bitmap? {
-        val cacheKey = "${pdfUri}_$pageIndex"
-        return memoryCache.get(cacheKey)
+    fun getCachedPage(pdfUri: Uri, pageIndex: Int, scaleBucket: Int = 1): Bitmap? {
+        val cacheKey = "${pdfUri}_${pageIndex}_$scaleBucket"
+        return memoryCache.get(cacheKey) ?: memoryCache.get("${pdfUri}_$pageIndex")
     }
 
     fun getCachedThumbnail(pdfUri: Uri, lastModified: Long = 0L, size: Long = 0L): Bitmap? {
@@ -134,10 +142,8 @@ class PdfRendererManager(private val context: Context) {
     ): Bitmap? = coroutineScope {
         val cacheKey = generateCacheKey(pdfUri, lastModified, size)
 
-        // 1. Fast Memory & Disk check
         getCachedThumbnail(pdfUri, lastModified, size)?.let { return@coroutineScope it }
 
-        // 2. De-duplicate in-flight requests for the same thumbnail
         val existingJob = inFlightThumbnails[cacheKey]
         if (existingJob != null) {
             return@coroutineScope existingJob.await()
@@ -145,22 +151,22 @@ class PdfRendererManager(private val context: Context) {
 
         val task = async(Dispatchers.IO) {
             try {
-                // Double-check cache before rendering
                 getCachedThumbnail(pdfUri, lastModified, size)?.let { return@async it }
 
-                Log.d(TAG, "RENDER THUMBNAIL START key=$cacheKey")
                 val session = openSession(pdfUri) ?: return@async null
                 val bitmap = try {
                     session.mutex.withLock {
                         if (session.isClosed || session.renderer.pageCount == 0) return@withLock null
                         val page = session.renderer.openPage(0)
                         val targetWidth = 320
-                        val aspectRatio = page.height.toFloat() / page.width.toFloat()
-                        val targetHeight = (targetWidth * aspectRatio).toInt().coerceAtLeast(1)
+                        val pageW = page.width.coerceAtLeast(1)
+                        val pageH = page.height.coerceAtLeast(1)
+                        val aspectRatio = pageH.toFloat() / pageW.toFloat()
+                        val targetHeight = (targetWidth * aspectRatio).toInt().coerceIn(1, 640)
 
                         val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-                        val canvas = android.graphics.Canvas(bmp)
-                        canvas.drawColor(android.graphics.Color.WHITE)
+                        val canvas = Canvas(bmp)
+                        canvas.drawColor(Color.WHITE)
 
                         page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         page.close()
@@ -183,7 +189,6 @@ class PdfRendererManager(private val context: Context) {
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed writing thumbnail to disk cache", e)
                     }
-                    Log.d(TAG, "RENDER THUMBNAIL COMPLETE key=$cacheKey")
                 }
                 bitmap
             } finally {
@@ -199,11 +204,13 @@ class PdfRendererManager(private val context: Context) {
         session: PdfSession,
         pdfUri: Uri,
         pageIndex: Int,
-        renderScale: Float = 1.35f
+        renderScale: Float = 1.5f
     ): Bitmap? = withContext(Dispatchers.IO) {
-        val cacheKey = "${pdfUri}_$pageIndex"
+        val safeScale = renderScale.coerceIn(1.0f, 3.0f)
+        val scaleBucket = (safeScale * 10).toInt()
+        val cacheKey = "${pdfUri}_${pageIndex}_$scaleBucket"
+
         memoryCache.get(cacheKey)?.let {
-            Log.d(TAG, "CACHE HIT page=$pageIndex")
             return@withContext it
         }
 
@@ -214,18 +221,52 @@ class PdfRendererManager(private val context: Context) {
             try {
                 if (pageIndex < 0 || pageIndex >= session.renderer.pageCount) return@withLock null
 
-                Log.d(TAG, "RENDER START page=$pageIndex")
                 val page = session.renderer.openPage(pageIndex)
-                val width = (page.width * renderScale).toInt().coerceAtLeast(1)
-                val height = (page.height * renderScale).toInt().coerceAtLeast(1)
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val rawW = page.width.coerceAtLeast(1)
+                val rawH = page.height.coerceAtLeast(1)
+
+                // Normalize base scale to screen display width
+                val screenWidth = context.resources.displayMetrics.widthPixels.coerceAtLeast(720)
+                val baseScale = screenWidth.toFloat() / rawW.toFloat()
+
+                var targetScale = baseScale * safeScale
+                var width = (rawW * targetScale).toInt().coerceAtLeast(1)
+                var height = (rawH * targetScale).toInt().coerceAtLeast(1)
+
+                // Enforce strict Max Dimension caps to protect Android Canvas memory limits
+                if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+                    val fitScale = min(MAX_DIMENSION.toFloat() / width, MAX_DIMENSION.toFloat() / height)
+                    width = (width * fitScale).toInt().coerceAtLeast(1)
+                    height = (height * fitScale).toInt().coerceAtLeast(1)
+                }
+
+                // Enforce strict Max Pixel count caps (~32MB RAM max per page bitmap)
+                val totalPixels = width.toLong() * height.toLong()
+                if (totalPixels > MAX_PIXELS) {
+                    val pixelScale = sqrt(MAX_PIXELS.toDouble() / totalPixels.toDouble()).toFloat()
+                    width = (width * pixelScale).toInt().coerceAtLeast(1)
+                    height = (height * pixelScale).toInt().coerceAtLeast(1)
+                }
+
+                val bitmap = try {
+                    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                } catch (oom: OutOfMemoryError) {
+                    Log.e(TAG, "OOM creating bitmap ($width x $height), falling back to screen resolution", oom)
+                    val fallbackW = (screenWidth * 0.8f).toInt()
+                    val fallbackH = (fallbackW * (rawH.toFloat() / rawW.toFloat())).toInt()
+                    Bitmap.createBitmap(fallbackW, fallbackH, Bitmap.Config.ARGB_8888)
+                }
+
+                val canvas = Canvas(bitmap)
+                canvas.drawColor(Color.WHITE)
+
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 page.close()
 
                 memoryCache.put(cacheKey, bitmap)
-                Log.d(TAG, "RENDER COMPLETE page=$pageIndex")
                 bitmap
             } catch (e: Exception) {
+                Log.e(TAG, "Failed rendering PDF page $pageIndex", e)
                 null
             }
         }
@@ -236,17 +277,15 @@ class PdfRendererManager(private val context: Context) {
         pdfUri: Uri,
         centerPageIndex: Int,
         pageCount: Int,
-        range: Int = 2
+        range: Int = 1,
+        renderScale: Float = 1.5f
     ) = withContext(Dispatchers.IO) {
         if (session.isClosed) return@withContext
         val start = (centerPageIndex - range).coerceAtLeast(0)
         val end = (centerPageIndex + range).coerceAtMost(pageCount - 1)
 
         for (idx in start..end) {
-            val cacheKey = "${pdfUri}_$idx"
-            if (memoryCache.get(cacheKey) == null) {
-                renderPage(session, pdfUri, idx)
-            }
+            renderPage(session, pdfUri, idx, renderScale)
         }
     }
 

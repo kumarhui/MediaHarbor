@@ -155,6 +155,7 @@ fun SelectionTopBar(
 
     var showSelectedFilesPanel by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     var showConvertToPdfDialog by remember { mutableStateOf(false) }
     var showIdCardLayoutDialog by remember { mutableStateOf(false) }
@@ -202,7 +203,6 @@ fun SelectionTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                // Selected Files Panel Icon
                 BadgedBox(
                     badge = {
                         if (selectedCount > 0) {
@@ -234,18 +234,9 @@ fun SelectionTopBar(
                     )
                 }
 
+                // Delete icon opens confirmation dialog before executing
                 IconButton(
-                    onClick = onShareSelected,
-                    enabled = selectedCount > 0
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Share Selected"
-                    )
-                }
-
-                IconButton(
-                    onClick = onDeleteSelected,
+                    onClick = { showDeleteConfirmDialog = true },
                     enabled = selectedCount > 0
                 ) {
                     Icon(
@@ -255,7 +246,6 @@ fun SelectionTopBar(
                     )
                 }
 
-                // Overflow Menu
                 Box {
                     IconButton(onClick = { showOverflowMenu = true }) {
                         Icon(Icons.Default.MoreVert, contentDescription = "More Options")
@@ -265,6 +255,15 @@ fun SelectionTopBar(
                         expanded = showOverflowMenu,
                         onDismissRequest = { showOverflowMenu = false }
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("Share With...") },
+                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                onShareSelected()
+                            }
+                        )
+
                         DropdownMenuItem(
                             text = { Text("Print With") },
                             leadingIcon = { Icon(Icons.Default.Print, contentDescription = null) },
@@ -280,15 +279,6 @@ fun SelectionTopBar(
                             onClick = {
                                 showOverflowMenu = false
                                 ShareHelper.openWithMultiple(context, selectionViewModel.selectedItems)
-                            }
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("Share With...") },
-                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
-                            onClick = {
-                                showOverflowMenu = false
-                                ShareHelper.shareMultiple(context, selectionViewModel.selectedItems)
                             }
                         )
 
@@ -344,6 +334,30 @@ fun SelectionTopBar(
                 }
             }
         }
+    }
+
+    if (showDeleteConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("Delete Selected Items?") },
+            text = { Text("Are you sure you want to delete $selectedCount selected file(s)? This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        showDeleteConfirmDialog = false
+                        onDeleteSelected()
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showSelectedFilesPanel) {

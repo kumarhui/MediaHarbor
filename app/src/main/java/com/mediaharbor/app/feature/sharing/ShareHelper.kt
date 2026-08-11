@@ -205,18 +205,32 @@ object PrintHelper {
             return
         }
 
-        val first = items.first()
-        val shareableUri = ShareHelper.getShareableUri(context, first.uri)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(shareableUri, first.mimeType)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            setPackage("com.nokoprint")
+        val shareableUris = ArrayList<Uri>(items.map { ShareHelper.getShareableUri(context, it.uri) })
+        val commonMime = if (items.all { it.mimeType.startsWith("image/") }) "image/*"
+        else if (items.all { it.mimeType == "application/pdf" }) "application/pdf"
+        else "*/*"
+
+        val intent = if (shareableUris.size == 1) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = items.first().mimeType
+                putExtra(Intent.EXTRA_STREAM, shareableUris.first())
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage("com.nokoprint")
+            }
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = commonMime
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, shareableUris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage("com.nokoprint")
+            }
         }
 
         try {
             context.startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(context, "NokoPrint failed to launch. Opening system print handler...", Toast.LENGTH_SHORT).show()
+            Log.w("PRINT_DEBUG", "NokoPrint launch failed, falling back to system print", e)
+            Toast.makeText(context, "NokoPrint launch failed. Opening system print handler...", Toast.LENGTH_SHORT).show()
             printMultiple(context, items)
         }
     }
