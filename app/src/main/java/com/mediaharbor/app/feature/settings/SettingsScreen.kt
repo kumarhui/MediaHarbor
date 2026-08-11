@@ -20,11 +20,12 @@ import com.mediaharbor.app.MediaHarborApp
 import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
 import com.mediaharbor.app.data.settings.SettingsManager
+import com.mediaharbor.app.data.settings.SortOption
 import com.mediaharbor.app.domain.usecase.BackupDataUseCase
 import kotlinx.coroutines.launch
 
 @Composable
-private fun SettingsCategoryHeader(title: String) {
+fun SettingsCategoryHeader(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.titleMedium,
@@ -35,7 +36,7 @@ private fun SettingsCategoryHeader(title: String) {
 }
 
 @Composable
-private fun SettingsItemRow(
+fun SettingsItemRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
@@ -78,12 +79,13 @@ fun SettingsScreen() {
     val tagColumns by settingsManager.tagColumns.collectAsState()
     val groupByDate by settingsManager.groupByDate.collectAsState()
     val groupPdfByDate by settingsManager.groupPdfByDate.collectAsState()
+    val photoSortOrder by settingsManager.photoSortOrder.collectAsState()
+    val pdfSortOrder by settingsManager.pdfSortOrder.collectAsState()
     val defaultTagIds by settingsManager.defaultTagIds.collectAsState()
 
     val allTagsRaw by app.database.tagDao().getAllTags().collectAsState(initial = emptyList())
     val allTags = remember(allTagsRaw) { allTagsRaw.distinctBy { it.name } }
 
-    // Initialize initial default tag IDs on fresh launch if unset
     LaunchedEffect(allTags) {
         if (defaultTagIds.isEmpty() && allTags.isNotEmpty()) {
             val defaultNames = setOf("Aadhaar", "PAN", "Bank", "Result")
@@ -104,6 +106,8 @@ fun SettingsScreen() {
     var showPhotoColumnsDialog by remember { mutableStateOf(false) }
     var showPdfColumnsDialog by remember { mutableStateOf(false) }
     var showTagColumnsDialog by remember { mutableStateOf(false) }
+    var showPhotoSortDialog by remember { mutableStateOf(false) }
+    var showPdfSortDialog by remember { mutableStateOf(false) }
 
     val defaultTagNamesSummary = remember(allTags, defaultTagIds) {
         val selected = allTags.filter { defaultTagIds.contains(it.id) }.map { it.name }
@@ -147,7 +151,7 @@ fun SettingsScreen() {
 
         Divider(modifier = Modifier.padding(vertical = 12.dp))
 
-        SettingsCategoryHeader("Gallery Layout")
+        SettingsCategoryHeader("Gallery Layout & Sorting")
 
         Row(
             modifier = Modifier
@@ -178,6 +182,20 @@ fun SettingsScreen() {
                 onCheckedChange = { settingsManager.setGroupPdfByDate(it) }
             )
         }
+
+        SettingsItemRow(
+            icon = Icons.Default.Sort,
+            title = "Photos Sort By",
+            subtitle = photoSortOrder.label,
+            onClick = { showPhotoSortDialog = true }
+        )
+
+        SettingsItemRow(
+            icon = Icons.Default.SortByAlpha,
+            title = "PDFs Sort By",
+            subtitle = pdfSortOrder.label,
+            onClick = { showPdfSortDialog = true }
+        )
 
         SettingsItemRow(
             icon = Icons.Default.GridOn,
@@ -256,6 +274,82 @@ fun SettingsScreen() {
             title = "MediaHarbor",
             subtitle = "Version 1.0.0 (Build 1) • Material 3 & Jetpack Compose",
             onClick = {}
+        )
+    }
+
+    if (showPhotoSortDialog) {
+        AlertDialog(
+            onDismissRequest = { showPhotoSortDialog = false },
+            title = { Text("Sort Photos") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    SortOption.values().forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    settingsManager.setPhotoSortOrder(option)
+                                    showPhotoSortDialog = false
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = photoSortOrder == option,
+                                onClick = null
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(option.label, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showPhotoSortDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showPdfSortDialog) {
+        AlertDialog(
+            onDismissRequest = { showPdfSortDialog = false },
+            title = { Text("Sort PDFs") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    SortOption.values().forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    settingsManager.setPdfSortOrder(option)
+                                    showPdfSortDialog = false
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = pdfSortOrder == option,
+                                onClick = null
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(option.label, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showPdfSortDialog = false }) { Text("Cancel") }
+            }
         )
     }
 

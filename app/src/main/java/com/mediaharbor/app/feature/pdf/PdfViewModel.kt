@@ -7,13 +7,19 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -31,9 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -48,6 +57,7 @@ import com.mediaharbor.app.data.media.datasource.MediaStoreImageDataSource
 import com.mediaharbor.app.data.media.datasource.MediaStorePdfDataSource
 import com.mediaharbor.app.data.repository.MediaRepositoryImpl
 import com.mediaharbor.app.data.settings.SettingsManager
+import com.mediaharbor.app.data.settings.SortOption
 import com.mediaharbor.app.domain.model.MediaItem
 import com.mediaharbor.app.domain.usecase.GetPdfsUseCase
 import com.mediaharbor.app.domain.usecase.SearchMediaUseCase
@@ -55,6 +65,7 @@ import com.mediaharbor.app.feature.selection.DragSelectContainer
 import com.mediaharbor.app.feature.selection.SelectionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -73,8 +84,18 @@ class PdfViewModel(context: android.content.Context) : ViewModel() {
     val pdfsFlow = getPdfsUseCase()
     val isScanning: StateFlow<Boolean> = MediaStorePdfDataSource.isScanning
 
-    fun filterPdfs(pdfs: List<MediaItem>, query: String): List<MediaItem> {
-        return searchUseCase(pdfs, query)
+    fun filterAndSortPdfs(pdfs: List<MediaItem>, query: String, sortOption: SortOption): List<MediaItem> {
+        val filtered = searchUseCase(pdfs, query)
+        return when (sortOption) {
+            SortOption.DATE_MODIFIED_DESC -> filtered.sortedByDescending { it.dateModified }
+            SortOption.DATE_MODIFIED_ASC -> filtered.sortedBy { it.dateModified }
+            SortOption.DATE_ADDED_DESC -> filtered.sortedByDescending { it.dateAdded }
+            SortOption.DATE_ADDED_ASC -> filtered.sortedBy { it.dateAdded }
+            SortOption.SIZE_DESC -> filtered.sortedByDescending { it.size }
+            SortOption.SIZE_ASC -> filtered.sortedBy { it.size }
+            SortOption.NAME_ASC -> filtered.sortedBy { it.displayName.lowercase() }
+            SortOption.NAME_DESC -> filtered.sortedByDescending { it.displayName.lowercase() }
+        }
     }
 }
 
@@ -138,6 +159,110 @@ fun PdfThumbnailView(
     }
 }
 
+@Composable
+fun ModernPdfVerticalScrubber(
+    gridState: LazyGridState,
+    scrollProgress: Float,
+    modifier: Modifier = Modifier
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var isDragging by remember { mutableStateOf(false) }
+    var trackHeightPx by remember { mutableFloatStateOf(0f) }
+
+    val thumbWidth by animateDpAsState(
+        targetValue = if (isDragging) 10.dp else 4.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "thumb_width"
+    )
+    val thumbHeight by animateDpAsState(
+        targetValue = if (isDragging) 52.dp else 36.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "thumb_height"
+    )
+    val thumbAlpha by animateFloatAsState(
+        targetValue = if (isDragging) 1f else 0.6f,
+        label = "thumb_alpha"
+    )
+    val trackAlpha by animateFloatAsState(
+        targetValue = if (isDragging) 0.25f else 0.08f,
+        label = "track_alpha"
+    )
+
+    Box(
+        modifier = modifier
+            .padding(end = 2.dp, top = 8.dp, bottom = 80.dp)
+            .fillMaxHeight()
+            .width(36.dp)
+            .onGloballyPositioned { trackHeightPx = it.size.height.toFloat() }
+            .pointerInput(gridState, trackHeightPx) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        isDragging = true
+                        if (trackHeightPx > 0f) {
+                            val targetProgress = (offset.y / trackHeightPx).coerceIn(0f, 1f)
+                            val totalItems = gridState.layoutInfo.totalItemsCount
+                            if (totalItems > 0) {
+                                val targetIndex = (targetProgress * (totalItems - 1)).toInt().coerceIn(0, totalItems - 1)
+                                coroutineScope.launch {
+                                    gridState.scrollToItem(targetIndex)
+                                }
+                            }
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        if (trackHeightPx > 0f) {
+                            val targetProgress = (change.position.y / trackHeightPx).coerceIn(0f, 1f)
+                            val totalItems = gridState.layoutInfo.totalItemsCount
+                            if (totalItems > 0) {
+                                val targetIndex = (targetProgress * (totalItems - 1)).toInt().coerceIn(0, totalItems - 1)
+                                coroutineScope.launch {
+                                    gridState.scrollToItem(targetIndex)
+                                }
+                            }
+                        }
+                    },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false }
+                )
+            }
+    ) {
+        // Minimal track line
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 5.dp)
+                .width(2.dp)
+                .fillMaxHeight()
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = trackAlpha))
+        )
+
+        // Animated scrubber thumb
+        Box(
+            modifier = Modifier
+                .align(
+                    BiasAlignment(
+                        horizontalBias = 1f,
+                        verticalBias = (scrollProgress * 2f) - 1f
+                    )
+                )
+                .padding(end = 1.dp)
+                .width(thumbWidth)
+                .height(thumbHeight)
+                .shadow(
+                    elevation = if (isDragging) 6.dp else 0.dp,
+                    shape = CircleShape
+                )
+                .clip(CircleShape)
+                .background(
+                    if (isDragging) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.primary.copy(alpha = thumbAlpha)
+                )
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PdfScreen(
@@ -150,6 +275,7 @@ fun PdfScreen(
     val settingsManager = remember { SettingsManager.getInstance(context) }
     val pdfColumns by settingsManager.pdfColumns.collectAsState()
     val groupPdfByDate by settingsManager.groupPdfByDate.collectAsState()
+    val pdfSortOrder by settingsManager.pdfSortOrder.collectAsState()
 
     val viewModel = remember { PdfViewModel(context) }
     val pdfManager = remember { PdfRendererManager(context) }
@@ -166,22 +292,23 @@ fun PdfScreen(
     var isInitialLoading by remember {
         mutableStateOf(MediaStorePdfDataSource.getCachedPdfs() == null && (isScanning || pdfs.isEmpty()))
     }
-    val filtered = remember(pdfs, searchQuery) { viewModel.filterPdfs(pdfs, searchQuery) }
+    val sortedAndFiltered = remember(pdfs, searchQuery, pdfSortOrder) {
+        viewModel.filterAndSortPdfs(pdfs, searchQuery, pdfSortOrder)
+    }
 
-    val groupedPdfs = remember(filtered, groupPdfByDate) {
-        if (groupPdfByDate && filtered.isNotEmpty()) {
-            filtered.groupBy { formatDateHeader(it.dateModified) }
+    val groupedPdfs = remember(sortedAndFiltered, groupPdfByDate) {
+        if (groupPdfByDate && sortedAndFiltered.isNotEmpty()) {
+            sortedAndFiltered.groupBy { formatDateHeader(it.dateModified) }
         } else {
             emptyMap()
         }
     }
 
-    // Flatten grouped items so the 0-indexed list sequence matches visual grid layout exactly
-    val displayedList = remember(filtered, groupedPdfs, groupPdfByDate) {
+    val displayedList = remember(sortedAndFiltered, groupedPdfs, groupPdfByDate) {
         if (groupPdfByDate && groupedPdfs.isNotEmpty()) {
             groupedPdfs.values.flatten()
         } else {
-            filtered
+            sortedAndFiltered
         }
     }
 
@@ -252,7 +379,7 @@ fun PdfScreen(
                 }
             }
         }
-    } else if (isInitialLoading && filtered.isEmpty()) {
+    } else if (isInitialLoading && sortedAndFiltered.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -263,7 +390,7 @@ fun PdfScreen(
                 Text("Scanning PDF documents...", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
             }
         }
-    } else if (filtered.isEmpty()) {
+    } else if (sortedAndFiltered.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No PDF documents found", style = MaterialTheme.typography.bodyLarge)
         }
@@ -370,30 +497,12 @@ fun PdfScreen(
                 }
             }
 
-            if (filtered.size > 15) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 2.dp, top = 8.dp, bottom = 80.dp)
-                        .fillMaxHeight()
-                        .width(4.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .fillMaxHeight(0.15f)
-                            .align(
-                                BiasAlignment(
-                                    horizontalBias = 0f,
-                                    verticalBias = (scrollProgress * 2f) - 1f
-                                )
-                            )
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                    )
-                }
+            if (sortedAndFiltered.size > 15) {
+                ModernPdfVerticalScrubber(
+                    gridState = gridState,
+                    scrollProgress = scrollProgress,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
         }
     }

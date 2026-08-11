@@ -1,13 +1,11 @@
 package com.mediaharbor.app
 
 import android.app.Activity
-import android.app.RecoverableSecurityException
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -19,13 +17,11 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mediaharbor.app.core.common.PermissionUtils
 import com.mediaharbor.app.data.local.entity.TagEntity
@@ -39,6 +35,7 @@ import com.mediaharbor.app.feature.imageviewer.ImageViewerScreen
 import com.mediaharbor.app.feature.navigation.FloatingNavigationBar
 import com.mediaharbor.app.feature.pdf.PdfScreen
 import com.mediaharbor.app.feature.pdfviewer.PdfViewerScreen
+import com.mediaharbor.app.feature.search.SearchScreen
 import com.mediaharbor.app.feature.selection.SelectionTopBar
 import com.mediaharbor.app.feature.selection.SelectionViewModel
 import com.mediaharbor.app.feature.settings.SettingsScreen
@@ -46,7 +43,9 @@ import com.mediaharbor.app.feature.sharing.ShareHelper
 import com.mediaharbor.app.feature.tags.TagCollectionScreen
 import com.mediaharbor.app.feature.tags.TagsScreen
 import com.mediaharbor.app.navigation.Screen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -95,8 +94,7 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
     var currentTab by remember { mutableStateOf<Screen>(Screen.Photos) }
     var activeViewerMedia by remember { mutableStateOf<MediaItem?>(null) }
     var activeTagCollection by remember { mutableStateOf<TagEntity?>(null) }
-    var searchQuery by remember { mutableStateOf("") }
-    var isSearchActive by remember { mutableStateOf(false) }
+    var isSearchScreenOpen by remember { mutableStateOf(false) }
 
     val selectionViewModel: SelectionViewModel = viewModel()
 
@@ -137,6 +135,10 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
         pendingBatchDeleteItems = emptyList()
     }
 
+    BackHandler(enabled = isSearchScreenOpen) {
+        isSearchScreenOpen = false
+    }
+
     BackHandler(enabled = selectionViewModel.isSelectionMode) {
         selectionViewModel.clearSelection()
     }
@@ -149,12 +151,33 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
         activeTagCollection = null
     }
 
-    BackHandler(enabled = !selectionViewModel.isSelectionMode && activeViewerMedia == null && activeTagCollection == null) {
+    BackHandler(enabled = !selectionViewModel.isSelectionMode && activeViewerMedia == null && activeTagCollection == null && !isSearchScreenOpen) {
         onDoubleBackExit()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (activeTagCollection != null) {
+        if (isSearchScreenOpen) {
+            SearchScreen(
+                allMediaItems = allMediaList,
+                onBack = { isSearchScreenOpen = false },
+                onMediaClick = { activeViewerMedia = it },
+                onTagClick = { tag ->
+                    isSearchScreenOpen = false
+                    activeTagCollection = tag
+                },
+                onRefresh = {
+                    withContext(Dispatchers.IO) {
+                        val imageDs = MediaStoreImageDataSource(context)
+                        val pdfDs = MediaStorePdfDataSource(context)
+                        MediaStoreImageDataSource.invalidateCache()
+                        MediaStorePdfDataSource.invalidateCache()
+                        val photos = imageDs.queryImages()
+                        val pdfs = pdfDs.queryPdfs()
+                        allMediaList = photos + pdfs
+                    }
+                }
+            )
+        } else if (activeTagCollection != null) {
             TagCollectionScreen(
                 tag = activeTagCollection!!,
                 allMediaItems = allMediaList,
@@ -211,26 +234,11 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
                             } else {
                                 TopAppBar(
                                     modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
-                                    title = {
-                                        if (isSearchActive) {
-                                            TextField(
-                                                value = searchQuery,
-                                                onValueChange = { searchQuery = it },
-                                                placeholder = { Text("Search title, path, folder...") },
-                                                singleLine = true,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        } else {
-                                            Text(currentTab.title)
-                                        }
-                                    },
+                                    title = { Text(currentTab.title) },
                                     actions = {
-                                        IconButton(onClick = {
-                                            isSearchActive = !isSearchActive
-                                            if (!isSearchActive) searchQuery = ""
-                                        }) {
+                                        IconButton(onClick = { isSearchScreenOpen = true }) {
                                             Icon(
-                                                imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                                                imageVector = Icons.Default.Search,
                                                 contentDescription = "Search"
                                             )
                                         }
@@ -257,12 +265,12 @@ fun MainAppStructure(onDoubleBackExit: () -> Unit) {
                 Box(modifier = Modifier.padding(paddingValues)) {
                     when (currentTab) {
                         Screen.Photos -> GalleryScreen(
-                            searchQuery = searchQuery,
+                            searchQuery = "",
                             selectionViewModel = selectionViewModel,
                             onMediaClick = { activeViewerMedia = it }
                         )
                         Screen.PDFs -> PdfScreen(
-                            searchQuery = searchQuery,
+                            searchQuery = "",
                             selectionViewModel = selectionViewModel,
                             onMediaClick = { activeViewerMedia = it }
                         )

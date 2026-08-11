@@ -60,7 +60,7 @@ class MediaStoreImageDataSource(private val context: Context) {
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun queryImages(): List<MediaItem> {
+    fun queryImages(): List<MediaItem> {
         val list = mutableListOf<MediaItem>()
         val projection = arrayOf(
             MediaStore.Images.Media._ID,

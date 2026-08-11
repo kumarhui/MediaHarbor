@@ -39,6 +39,15 @@ object ShareHelper {
         }
     }
 
+    fun isPackageInstalled(context: Context, packageName: String): Boolean {
+        return try {
+            context.packageManager.getPackageInfo(packageName, 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun shareViaWhatsApp(context: Context, uri: Uri, mimeType: String) {
         val shareUri = getShareableUri(context, uri)
         val intent = Intent(Intent.ACTION_SEND).apply {
@@ -55,6 +64,45 @@ object ShareHelper {
         }
     }
 
+    fun shareToWhatsAppMultiple(context: Context, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        val isInstalled = isPackageInstalled(context, "com.whatsapp") || isPackageInstalled(context, "com.whatsapp.w4b")
+
+        if (!isInstalled) {
+            Toast.makeText(context, "WhatsApp is not installed. Opening general share sheet...", Toast.LENGTH_SHORT).show()
+            shareMultiple(context, items)
+            return
+        }
+
+        val shareableUris = ArrayList<Uri>(items.map { getShareableUri(context, it.uri) })
+        val commonMime = if (items.all { it.mimeType.startsWith("image/") }) "image/*"
+        else if (items.all { it.mimeType == "application/pdf" }) "application/pdf"
+        else "*/*"
+
+        val intent = if (shareableUris.size == 1) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = items.first().mimeType
+                putExtra(Intent.EXTRA_STREAM, shareableUris.first())
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage("com.whatsapp")
+            }
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = commonMime
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, shareableUris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage("com.whatsapp")
+            }
+        }
+
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(context, "Opening WhatsApp failed. Launching share sheet...", Toast.LENGTH_SHORT).show()
+            shareMultiple(context, items)
+        }
+    }
+
     fun shareGeneral(context: Context, uri: Uri, mimeType: String) {
         val shareUri = getShareableUri(context, uri)
         val intent = Intent(Intent.ACTION_SEND).apply {
@@ -62,7 +110,45 @@ object ShareHelper {
             putExtra(Intent.EXTRA_STREAM, shareUri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "Share Media"))
+        try {
+            context.startActivity(Intent.createChooser(intent, "Share Media"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "No app available to share file", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun openWith(context: Context, uri: Uri, mimeType: String) {
+        val shareUri = getShareableUri(context, uri)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(shareUri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            context.startActivity(Intent.createChooser(intent, "Open With"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "No app available to open this file", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun openWithMultiple(context: Context, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        if (items.size == 1) {
+            val first = items.first()
+            openWith(context, first.uri, first.mimeType)
+            return
+        }
+
+        val first = items.first()
+        val shareUri = getShareableUri(context, first.uri)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(shareUri, first.mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            context.startActivity(Intent.createChooser(intent, "Open With (${items.size} items selected)"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "No compatible application installed", Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun shareMultiple(context: Context, items: List<MediaItem>) {
@@ -97,108 +183,119 @@ object ShareHelper {
 
 object PrintHelper {
 
-    fun printPdf(context: Context, uri: Uri, documentName: String = "Document") {
-        val nokoPackage = "com.nokoprint"
-        val shareableUri = ShareHelper.getShareableUri(context, uri)
+    fun printMultiple(context: Context, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        val pdfs = items.filter { it.mimeType == "application/pdf" }
+        if (pdfs.isNotEmpty()) {
+            val firstPdf = pdfs.first()
+            printPdf(context, firstPdf.uri, firstPdf.displayName)
+        } else {
+            val first = items.first()
+            ShareHelper.openWith(context, first.uri, first.mimeType)
+        }
+    }
 
-        val isNokoInstalled = try {
-            context.packageManager.getPackageInfo(nokoPackage, 0)
-            true
-        } catch (_: Exception) {
-            false
+    fun printWithNokoPrint(context: Context, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        val nokoprintInstalled = ShareHelper.isPackageInstalled(context, "com.nokoprint")
+
+        if (!nokoprintInstalled) {
+            Toast.makeText(context, "NokoPrint is not installed. Opening system print handler...", Toast.LENGTH_SHORT).show()
+            printMultiple(context, items)
+            return
         }
 
-        if (isNokoInstalled) {
-            try {
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_STREAM, shareableUri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    setPackage(nokoPackage)
-                }
-                context.grantUriPermission(nokoPackage, shareableUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                context.startActivity(intent)
-                return
-            } catch (e: Exception) {
-                Log.e("PRINT_DEBUG", "Error opening NokoPrint, falling back to system print", e)
-                Toast.makeText(context, "NokoPrint error. Launching system print...", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(context, "NokoPrint not installed. Opening system print...", Toast.LENGTH_SHORT).show()
+        val first = items.first()
+        val shareableUri = ShareHelper.getShareableUri(context, first.uri)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(shareableUri, first.mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            setPackage("com.nokoprint")
         }
 
         try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(context, "NokoPrint failed to launch. Opening system print handler...", Toast.LENGTH_SHORT).show()
+            printMultiple(context, items)
+        }
+    }
+
+    fun printPdf(context: Context, uri: Uri, documentName: String = "Document") {
+        val shareableUri = ShareHelper.getShareableUri(context, uri)
+
+        try {
             val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
-            if (printManager == null) {
-                Toast.makeText(context, "Print service unavailable", Toast.LENGTH_SHORT).show()
-                return
-            }
+            if (printManager != null) {
+                val jobName = "MediaHarbor_$documentName"
 
-            val jobName = "MediaHarbor_$documentName"
-
-            val printAdapter = object : PrintDocumentAdapter() {
-                override fun onLayout(
-                    oldAttributes: PrintAttributes?,
-                    newAttributes: PrintAttributes?,
-                    cancellationSignal: CancellationSignal?,
-                    callback: LayoutResultCallback?,
-                    extras: Bundle?
-                ) {
-                    if (cancellationSignal?.isCanceled == true) {
-                        callback?.onLayoutCancelled()
-                        return
-                    }
-
-                    val info = PrintDocumentInfo.Builder(jobName)
-                        .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                        .build()
-
-                    callback?.onLayoutFinished(info, newAttributes != oldAttributes)
-                }
-
-                override fun onWrite(
-                    pages: Array<out PageRange>?,
-                    destination: ParcelFileDescriptor?,
-                    cancellationSignal: CancellationSignal?,
-                    callback: WriteResultCallback?
-                ) {
-                    var input: FileInputStream? = null
-                    var output: FileOutputStream? = null
-                    try {
-                        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                        if (pfd == null) {
-                            callback?.onWriteFailed("Cannot open document descriptor")
+                val printAdapter = object : PrintDocumentAdapter() {
+                    override fun onLayout(
+                        oldAttributes: PrintAttributes?,
+                        newAttributes: PrintAttributes?,
+                        cancellationSignal: CancellationSignal?,
+                        callback: LayoutResultCallback?,
+                        extras: Bundle?
+                    ) {
+                        if (cancellationSignal?.isCanceled == true) {
+                            callback?.onLayoutCancelled()
                             return
                         }
-                        input = FileInputStream(pfd.fileDescriptor)
-                        output = FileOutputStream(destination?.fileDescriptor)
 
-                        val buf = ByteArray(16384)
-                        var bytesRead: Int
-                        while (input.read(buf).also { bytesRead = it } >= 0) {
-                            if (cancellationSignal?.isCanceled == true) {
-                                callback?.onWriteCancelled()
+                        val info = PrintDocumentInfo.Builder(jobName)
+                            .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                            .build()
+
+                        callback?.onLayoutFinished(info, newAttributes != oldAttributes)
+                    }
+
+                    override fun onWrite(
+                        pages: Array<out PageRange>?,
+                        destination: ParcelFileDescriptor?,
+                        cancellationSignal: CancellationSignal?,
+                        callback: WriteResultCallback?
+                    ) {
+                        var input: FileInputStream? = null
+                        var output: FileOutputStream? = null
+                        try {
+                            val pfd = context.contentResolver.openFileDescriptor(shareableUri, "r")
+                            if (pfd == null) {
+                                callback?.onWriteFailed("Cannot open document descriptor")
                                 return
                             }
-                            output.write(buf, 0, bytesRead)
-                        }
+                            input = FileInputStream(pfd.fileDescriptor)
+                            output = FileOutputStream(destination?.fileDescriptor)
 
-                        callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
-                        pfd.close()
-                    } catch (e: Exception) {
-                        Log.e("PRINT_DEBUG", "Error writing PDF for printing", e)
-                        callback?.onWriteFailed(e.message)
-                    } finally {
-                        try { input?.close() } catch (_: Exception) {}
-                        try { output?.close() } catch (_: Exception) {}
+                            val buf = ByteArray(16384)
+                            var bytesRead: Int
+                            while (input.read(buf).also { bytesRead = it } >= 0) {
+                                if (cancellationSignal?.isCanceled == true) {
+                                    callback?.onWriteCancelled()
+                                    return
+                                }
+                                output.write(buf, 0, bytesRead)
+                            }
+
+                            callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                            pfd.close()
+                        } catch (e: Exception) {
+                            Log.e("PRINT_DEBUG", "Error writing document for printing", e)
+                            callback?.onWriteFailed(e.message)
+                        } finally {
+                            try { input?.close() } catch (_: Exception) {}
+                            try { output?.close() } catch (_: Exception) {}
+                        }
                     }
                 }
-            }
 
-            printManager.print(jobName, printAdapter, null)
+                printManager.print(jobName, printAdapter, null)
+                return
+            }
         } catch (e: Exception) {
-            Log.e("PRINT_DEBUG", "Error initiating print job", e)
-            Toast.makeText(context, "Unable to print document: ${e.message}", Toast.LENGTH_SHORT).show()
+            Log.e("PRINT_DEBUG", "Native PrintManager failed, trying intent fallback", e)
         }
+
+        // Fallback: Open general Intent chooser for print/view
+        ShareHelper.openWith(context, uri, "application/pdf")
     }
 }

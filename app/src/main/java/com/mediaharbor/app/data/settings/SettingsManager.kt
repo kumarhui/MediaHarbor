@@ -6,6 +6,21 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+enum class SortOption(val key: String, val label: String) {
+    DATE_MODIFIED_DESC("date_modified_desc", "Date modified (Newest first)"),
+    DATE_MODIFIED_ASC("date_modified_asc", "Date modified (Oldest first)"),
+    DATE_ADDED_DESC("date_added_desc", "Date added (Newest first)"),
+    DATE_ADDED_ASC("date_added_asc", "Date added (Oldest first)"),
+    SIZE_DESC("size_desc", "File size (Largest first)"),
+    SIZE_ASC("size_asc", "File size (Smallest first)"),
+    NAME_ASC("name_asc", "Name (A–Z)"),
+    NAME_DESC("name_desc", "Name (Z–A)");
+
+    companion object {
+        fun fromKey(key: String): SortOption = values().find { it.key == key } ?: DATE_MODIFIED_DESC
+    }
+}
+
 class SettingsManager private constructor(context: Context) {
 
     private val prefs: SharedPreferences = context.applicationContext.getSharedPreferences(
@@ -33,6 +48,16 @@ class SettingsManager private constructor(context: Context) {
 
     private val _groupPdfByDate = MutableStateFlow(prefs.getBoolean(KEY_GROUP_PDF_BY_DATE, true))
     val groupPdfByDate: StateFlow<Boolean> = _groupPdfByDate.asStateFlow()
+
+    private val _photoSortOrder = MutableStateFlow(
+        SortOption.fromKey(prefs.getString(KEY_PHOTO_SORT_ORDER, SortOption.DATE_MODIFIED_DESC.key) ?: SortOption.DATE_MODIFIED_DESC.key)
+    )
+    val photoSortOrder: StateFlow<SortOption> = _photoSortOrder.asStateFlow()
+
+    private val _pdfSortOrder = MutableStateFlow(
+        SortOption.fromKey(prefs.getString(KEY_PDF_SORT_ORDER, SortOption.DATE_MODIFIED_DESC.key) ?: SortOption.DATE_MODIFIED_DESC.key)
+    )
+    val pdfSortOrder: StateFlow<SortOption> = _pdfSortOrder.asStateFlow()
 
     private val _defaultTagIds = MutableStateFlow(
         prefs.getStringSet(KEY_DEFAULT_TAG_IDS, emptySet())?.mapNotNull { it.toLongOrNull() }?.toSet() ?: emptySet()
@@ -77,6 +102,16 @@ class SettingsManager private constructor(context: Context) {
         _groupPdfByDate.value = enabled
     }
 
+    fun setPhotoSortOrder(sortOption: SortOption) {
+        prefs.edit().putString(KEY_PHOTO_SORT_ORDER, sortOption.key).apply()
+        _photoSortOrder.value = sortOption
+    }
+
+    fun setPdfSortOrder(sortOption: SortOption) {
+        prefs.edit().putString(KEY_PDF_SORT_ORDER, sortOption.key).apply()
+        _pdfSortOrder.value = sortOption
+    }
+
     fun setDefaultTagIds(ids: Set<Long>) {
         val stringSet = ids.map { it.toString() }.toSet()
         prefs.edit().putStringSet(KEY_DEFAULT_TAG_IDS, stringSet).apply()
@@ -92,6 +127,8 @@ class SettingsManager private constructor(context: Context) {
         private const val KEY_TAG_COLUMNS = "tag_columns"
         private const val KEY_GROUP_BY_DATE = "group_by_date"
         private const val KEY_GROUP_PDF_BY_DATE = "group_pdf_by_date"
+        private const val KEY_PHOTO_SORT_ORDER = "photo_sort_order"
+        private const val KEY_PDF_SORT_ORDER = "pdf_sort_order"
         private const val KEY_DEFAULT_TAG_IDS = "default_tag_ids"
 
         @Volatile

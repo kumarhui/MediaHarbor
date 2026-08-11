@@ -73,6 +73,8 @@ fun ImageViewerScreen(
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showTagPickerDialog by remember { mutableStateOf(false) }
 
+    var rotationDegrees by remember { mutableFloatStateOf(0f) }
+
     val safePage = pagerState.currentPage.coerceIn(0, activeList.size - 1)
     val currentMedia = activeList.getOrNull(safePage) ?: activeList[0]
 
@@ -87,6 +89,7 @@ fun ImageViewerScreen(
     LaunchedEffect(pagerState.currentPage) {
         scale = 1f
         panOffset = Offset.Zero
+        rotationDegrees = 0f
     }
 
     val isZoomed = scale > 1.05f
@@ -257,6 +260,7 @@ fun ImageViewerScreen(
                         .graphicsLayer {
                             scaleX = scale
                             scaleY = scale
+                            rotationZ = rotationDegrees
                             translationX = panOffset.x
                             translationY = panOffset.y
                         }
@@ -328,13 +332,24 @@ fun ImageViewerScreen(
                     }
                     DropdownMenu(expanded = overflowExpanded, onDismissRequest = { overflowExpanded = false }) {
                         DropdownMenuItem(
-                            text = { Text("Convert to PDF") },
+                            text = { Text("Rotate Left (-90°)") },
                             onClick = {
                                 overflowExpanded = false
-                                coroutineScope.launch {
-                                    ConvertImageToPdfUseCase(context)(currentMedia.uri, currentMedia.displayName.removeSuffix(".jpg"))
-                                    Toast.makeText(context, "Converted to PDF in Documents/MediaHarbor", Toast.LENGTH_LONG).show()
-                                }
+                                rotationDegrees = (rotationDegrees - 90f) % 360f
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Rotate Right (+90°)") },
+                            onClick = {
+                                overflowExpanded = false
+                                rotationDegrees = (rotationDegrees + 90f) % 360f
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Open With") },
+                            onClick = {
+                                overflowExpanded = false
+                                ShareHelper.openWith(context, currentMedia.uri, currentMedia.mimeType)
                             }
                         )
                         DropdownMenuItem(
@@ -342,6 +357,23 @@ fun ImageViewerScreen(
                             onClick = {
                                 overflowExpanded = false
                                 ShareHelper.shareGeneral(context, currentMedia.uri, currentMedia.mimeType)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Print With") },
+                            onClick = {
+                                overflowExpanded = false
+                                PrintHelper.printPdf(context, currentMedia.uri, currentMedia.displayName)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Convert to PDF") },
+                            onClick = {
+                                overflowExpanded = false
+                                coroutineScope.launch {
+                                    ConvertImageToPdfUseCase(context)(currentMedia.uri, currentMedia.displayName.removeSuffix(".jpg"))
+                                    Toast.makeText(context, "Converted to PDF in Documents/MediaHarbor", Toast.LENGTH_LONG).show()
+                                }
                             }
                         )
                         DropdownMenuItem(
